@@ -19,6 +19,16 @@ const errMsg = ref('')
 const dataRoot = ref('')
 const retrying = ref<Set<string>>(new Set())
 
+// image preview modal
+const previewFrame = ref<Frame | null>(null)
+
+function openPreview(f: Frame) {
+  previewFrame.value = f
+}
+function closePreview() {
+  previewFrame.value = null
+}
+
 async function retrySummary(f: Frame) {
   if (retrying.value.has(f.time)) return
   retrying.value.add(f.time)
@@ -104,7 +114,13 @@ function imgSrc(rel: string) {
       <div v-else-if="!frames.length" class="muted">暂无数据（刚启动？等待前几帧）</div>
       <div v-else class="timeline">
         <div v-for="(f, i) in [...frames].reverse()" :key="i" class="tl-item">
-          <img v-if="f.image" :src="imgSrc(f.image)" class="thumb" alt="" />
+          <img
+            v-if="f.image"
+            :src="imgSrc(f.image)"
+            class="thumb"
+            alt=""
+            @click="openPreview(f)"
+          />
           <div class="tl-body">
             <div class="tl-head">
               <span class="tl-time">{{ f.time.slice(11, 16) }}</span>
@@ -129,6 +145,37 @@ function imgSrc(rel: string) {
         </div>
       </div>
     </div>
+
+    <!-- multi-screen image preview modal -->
+    <Teleport to="body">
+      <div v-if="previewFrame" class="preview-overlay" @click.self="closePreview">
+        <div class="preview-modal glass">
+          <div class="preview-head">
+            <span class="preview-time">{{ previewFrame.time.slice(11, 16) }}</span>
+            <span v-if="previewFrame.app" class="chip">{{ previewFrame.app }}</span>
+            <span v-if="previewFrame.activity" class="chip warn">{{ previewFrame.activity }}</span>
+            <button class="preview-close" @click="closePreview">×</button>
+          </div>
+          <div class="preview-images">
+            <img
+              :src="imgSrc(previewFrame.image)"
+              class="preview-img"
+              alt="主屏"
+            />
+            <img
+              v-for="(extra, i) in (previewFrame.extra_images || [])"
+              :key="i"
+              :src="imgSrc(extra)"
+              class="preview-img"
+              :alt="`屏幕 ${i + 2}`"
+            />
+          </div>
+          <div v-if="previewFrame.summary5.length" class="preview-summary">
+            <span v-for="(s, j) in previewFrame.summary5" :key="j">{{ s }}&nbsp;</span>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -187,6 +234,12 @@ function imgSrc(rel: string) {
   border-radius: 10px;
   flex-shrink: 0;
   filter: brightness(0.95);
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.15s;
+}
+.thumb:hover {
+  filter: brightness(1.08);
+  transform: scale(1.04);
 }
 .tl-head {
   display: flex;
@@ -224,5 +277,88 @@ function imgSrc(rel: string) {
 }
 .retry-hint {
   font-size: 11px;
+}
+
+/* image preview modal */
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: fadeIn 0.18s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.preview-modal {
+  max-width: 90vw;
+  max-height: 85vh;
+  width: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+}
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 8px;
+  flex-shrink: 0;
+}
+.preview-time {
+  font-weight: 700;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: #eef0ff;
+}
+.preview-close {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 8px;
+  color: #c9cde8;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.preview-close:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.preview-images {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 16px;
+  overflow: auto;
+  min-height: 0;
+  align-items: flex-start;
+}
+.preview-img {
+  height: 40vh;
+  width: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: #0a0c1a;
+  flex-shrink: 0;
+}
+.preview-summary {
+  padding: 10px 16px 14px;
+  font-size: 13px;
+  color: #c9cde8;
+  line-height: 1.6;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
 }
 </style>
