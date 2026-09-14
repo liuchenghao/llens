@@ -69,7 +69,7 @@ function imgSrc(rel: string) {
 </script>
 
 <template>
-  <div>
+  <div class="overview-root">
     <h1 class="page">今日概览</h1>
     <div class="row">
       <div class="glass card">
@@ -93,12 +93,12 @@ function imgSrc(rel: string) {
       </div>
     </div>
 
-    <div class="glass card" v-if="errMsg">
+    <div class="glass card err-card" v-if="errMsg">
       <h3>状态</h3>
       <div class="chip warn">截屏读取失败：{{ errMsg }}（请检查屏幕录制权限）</div>
     </div>
 
-    <div class="glass card">
+    <div class="glass card timeline-card">
       <h3>时间轴 · 倒序</h3>
       <div v-if="loading && !frames.length" class="muted">加载中…</div>
       <div v-else-if="!frames.length" class="muted">暂无数据（刚启动？等待前几帧）</div>
@@ -133,6 +133,27 @@ function imgSrc(rel: string) {
 </template>
 
 <style scoped>
+/* outer flex column: fills remaining content area, bottom 30px */
+.overview-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  
+}
+.overview-root > .row {
+  flex-shrink: 0;
+}
+.overview-root > .err-card {
+  flex-shrink: 0;
+}
+.overview-root > .timeline-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .big-num {
   font-size: 40px;
   font-weight: 800;
@@ -145,8 +166,11 @@ function imgSrc(rel: string) {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 52vh;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
 }
 .tl-item {
   display: flex;
