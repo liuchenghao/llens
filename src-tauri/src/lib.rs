@@ -34,6 +34,7 @@ pub fn run() {
             api::get_diary,
             api::list_diary_dates,
             api::regenerate_diaries,
+            api::retry_frame_summary,
             api::qa_search,
             api::qa_plan,
             api::qa_answer,

@@ -370,7 +370,7 @@ const kpi = computed(() => ({
 .board-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  /* align-items: center; */
   margin-bottom: 14px;
 }
 .seg {

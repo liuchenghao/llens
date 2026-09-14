@@ -125,8 +125,8 @@ function shiftMonth(delta: number) {
           <div class="cal-title">{{ year }} 年 {{ month + 1 }} 月</div>
           <button class="btn" @click="shiftMonth(1)">›</button>
         </div>
+        <div class="cal-dow"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
         <div class="cal">
-          <div class="cal-dow">一二三四五六日</div>
           <div
             v-for="c in days"
             :key="c.day"
@@ -202,8 +202,10 @@ function shiftMonth(delta: number) {
   gap: 4px;
   font-size: 11px;
   color: #8b90b5;
-  text-align: center;
   margin-bottom: 4px;
+}
+.cal-dow span {
+  text-align: center;
 }
 .cal-day {
   position: relative;
@@ -292,6 +294,17 @@ function shiftMonth(delta: number) {
   gap: 8px;
   align-items: center;
   list-style: none;
+  padding: 4px 0;
+}
+.todos li input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: #7aa5ff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.todos li span {
+  flex: 1;
 }
 .todos {
   padding-left: 4px !important;

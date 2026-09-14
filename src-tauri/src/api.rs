@@ -93,6 +93,24 @@ pub fn list_range(start_day: String, end_day: String) -> RangeData {
     }
 }
 
+/// Regenerate the AI summary for a single frame (screenshot still on disk).
+#[tauri::command]
+pub async fn retry_frame_summary(day: String, time: String) -> Result<Frame, String> {
+    let d = NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+        .unwrap_or_else(|_| chrono::Local::now().date_naive());
+    let start = day_midnight(&d);
+    let end = day_midnight(&(d + Duration::days(1)));
+    let frames = crate::store::collect_frames_in_range(&root(), &start, &end);
+    let idx = frames
+        .iter()
+        .position(|f| f.time == time)
+        .ok_or_else(|| format!("frame {time} not found in {day}"))?;
+    let f = &frames[idx];
+    let new_frame = crate::capture::retry_frame(&cfg(), &root(), f).await?;
+    crate::capture::replace_frame_in_day(&root(), &f.time, &new_frame);
+    Ok(new_frame)
+}
+
 /// Get one day's diary.
 #[tauri::command]
 pub fn get_diary(day: String) -> Result<Option<Diary>, String> {

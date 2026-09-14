@@ -17,6 +17,23 @@ const frames = ref<Frame[]>([])
 const loading = ref(false)
 const errMsg = ref('')
 const dataRoot = ref('')
+const retrying = ref<Set<string>>(new Set())
+
+async function retrySummary(f: Frame) {
+  if (retrying.value.has(f.time)) return
+  retrying.value.add(f.time)
+  try {
+    const day = f.time.slice(0, 10)
+    const updated = await invoke<Frame>('retry_frame_summary', { day, time: f.time })
+    // update the frame in place
+    const idx = frames.value.findIndex((x) => x.time === f.time)
+    if (idx >= 0) frames.value[idx] = updated
+  } catch (e: any) {
+    errMsg.value = `重新生成失败：${String(e)}`
+  } finally {
+    retrying.value.delete(f.time)
+  }
+}
 
 async function load() {
   loading.value = true
@@ -97,7 +114,16 @@ function imgSrc(rel: string) {
             </div>
             <div class="tl-sent">
               <span v-for="(s, j) in f.summary5" :key="j">{{ s }}&nbsp;</span>
-              <span v-if="!f.summary5.length" class="muted">（总结生成中或失败）</span>
+              <template v-if="!f.summary5.length">
+                <button
+                  :class="['retry-btn', { busy: retrying.has(f.time) }]"
+                  :disabled="retrying.has(f.time)"
+                  @click="retrySummary(f)"
+                >
+                  {{ retrying.has(f.time) ? '生成中…' : '↻ 重新生成' }}
+                </button>
+                <span class="muted retry-hint">（总结生成失败，可重试）</span>
+              </template>
             </div>
           </div>
         </div>
@@ -153,5 +179,26 @@ function imgSrc(rel: string) {
   font-size: 13px;
   color: #c9cde8;
   line-height: 1.5;
+}
+.retry-btn {
+  padding: 3px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 176, 64, 0.5);
+  background: rgba(255, 176, 64, 0.12);
+  color: #ffcf94;
+  font-size: 12px;
+  cursor: pointer;
+  margin-right: 8px;
+  transition: all 0.2s;
+}
+.retry-btn:hover:not(:disabled) {
+  background: rgba(255, 176, 64, 0.25);
+}
+.retry-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.retry-hint {
+  font-size: 11px;
 }
 </style>

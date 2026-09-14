@@ -47,6 +47,149 @@ pub async fn run_loop(handle: tauri::AppHandle) {
     }
 }
 
+// ---------- shared summarization helpers ----------
+
+/// Compress a screenshot to a JPEG data-URL (≤1280px, q70).
+async fn compress_to_data_url(p: &std::path::Path) -> Result<String, String> {
+    let img = std::fs::read(p).map_err(|e| format!("read shot {}: {e}", p.display()))?;
+    let (_jpeg, data_url) = compress_for_llm(&img).await?;
+    Ok(data_url)
+}
+
+/// Build the frame-summarization prompt.
+fn frame_prompt(n_displays: usize, time_str: &str) -> String {
+    let display_note = if n_displays == 1 {
+        "这是用户 macOS 的屏幕截图（1 块屏幕）。".to_string()
+    } else {
+        format!(
+            "这是用户 macOS 多显示器在同一时刻的 {n_displays} 张截图（按显示器 1..{n_displays} 排列，第 1 张是主屏）。请综合所有屏幕理解用户当前活动。"
+        )
+    };
+    format!(
+        r#"{}请看截图，请严格按如下 JSON 输出（不要输出 JSON 以外的任何文字）：
+{{"summary5":["第一句","第二句","第三句","第四句","第五句"],"activity":"工作|学习|娱乐|社交|其他","app":"当前主应用名，无法判断则 unknown","project":"可见的项目/工作区名，无法判断则 unknown"}}
+其中 summary5 恰好 5 句话，每句不超过 30 字，用中文，客观描述用户正在做什么（如果多屏在同时做不同的事，请合并概括）。
+截图时间：{time_str}。"#,
+        display_note
+    )
+}
+
+/// Parse JSON out of messy model output.
+fn parse_llm_json(text: &str) -> serde_json::Value {
+    let mut parsed = serde_json::Value::Null;
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            if end > start {
+                parsed = serde_json::from_str(&text[start..=end]).unwrap_or(serde_json::Value::Null);
+            }
+        }
+    }
+    parsed
+}
+
+/// Run the LLM with retry/backoff and return the parsed JSON.
+async fn llm_summarize(cfg: &Config, data_urls: &[String], n_displays: usize, time_str: &str) -> serde_json::Value {
+    let prompt = frame_prompt(n_displays, time_str);
+    let mut llm_text = String::new();
+    let client = reqwest::Client::new();
+    for attempt in 0..3 {
+        let msg = super::llm::multi_image_msg(data_urls, &prompt);
+        match super::llm::chat(&client, cfg, &[msg]).await {
+            Ok(t) => {
+                llm_text = t;
+                break;
+            }
+            Err(e) => {
+                if attempt < 2 {
+                    eprintln!("llm attempt {} failed: {e}; retrying", attempt + 1);
+                    tokio::time::sleep(std::time::Duration::from_secs(u64::from(2u32.pow(attempt + 1) * 4))).await;
+                } else {
+                    eprintln!("llm failed after 3 attempts: {e}");
+                }
+            }
+        }
+    }
+    parse_llm_json(&llm_text)
+}
+
+/// Re-summarize an existing frame (screenshot already on disk). Used by the
+/// retry button in the timeline. Returns the updated frame.
+pub async fn retry_frame(cfg: &Config, data_root: &PathBuf, frame: &Frame) -> Result<Frame, String> {
+    let shot = data_root.join(&frame.image);
+    if !shot.exists() {
+        return Err(format!("screenshot not found: {}", frame.image));
+    }
+    let mut paths: Vec<std::path::PathBuf> = vec![shot];
+    for extra in &frame.extra_images {
+        let p = data_root.join(extra);
+        if p.exists() {
+            paths.push(p);
+        }
+    }
+    let time_str = frame.time.clone();
+    let data_urls = futures_join_paths(&paths).await?;
+    let parsed = llm_summarize(cfg, &data_urls, paths.len(), &time_str).await;
+
+    let mut out = frame.clone();
+    out.summary5 = parsed["summary5"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .take(5)
+                .collect()
+        })
+        .unwrap_or_default();
+    out.activity = parsed["activity"].as_str().map(|s| s.to_string());
+    out.app = parsed["app"].as_str().map(|s| s.to_string());
+    out.project = parsed["project"].as_str().map(|s| s.to_string());
+    Ok(out)
+}
+
+/// Replace a single frame's summary fields in the day's hour log files.
+pub fn replace_frame_in_day(data_root: &PathBuf, frame_time: &str, updated: &Frame) {
+    let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let day = frame_time.get(..10).unwrap_or(&today_str);
+    let month = day.get(..7).unwrap_or_default();
+    let log_dir = data_root.join("logs").join(month);
+    let mut found = false;
+    for h in 0..24u32 {
+        let p = log_dir
+            .join(format!("{day}_{h:02}"))
+            .with_extension("json");
+        if !p.exists() {
+            continue;
+        }
+        let s = match std::fs::read_to_string(&p) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let mut hf: HourFile = match serde_json::from_str(&s) {
+            Ok(hf) => hf,
+            Err(_) => continue,
+        };
+        if let Some(idx) = hf.frames.iter().position(|f| f.time == frame_time) {
+            hf.frames[idx] = updated.clone();
+            write_hour_file(&p, &hf);
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        eprintln!("replace_frame_in_day: frame {frame_time} not found in any hour file");
+    }
+}
+
+/// Compress all paths to data-URLs.
+async fn futures_join_paths(paths: &[std::path::PathBuf]) -> Result<Vec<String>, String> {
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        out.push(compress_to_data_url(p).await?);
+    }
+    Ok(out)
+}
+
 /// One 20s tick: screenshot + AI summary + hour JSON append + 10min boundary check.
 pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, String> {
     let now = chrono::Local::now();
@@ -113,65 +256,11 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
     // 2) Compress every display to JPEG ≤1280px — upstream LLM 500s on
     // multi-MB PNG payloads (Retina 3x full-screen PNGs are 5-10MB each).
     let all_paths = std::iter::once(main_path.clone()).chain(extra_paths.clone()).collect::<Vec<_>>();
-    let mut data_urls: Vec<String> = Vec::new();
-    for p in &all_paths {
-        let img = std::fs::read(p).map_err(|e| format!("read shot {}: {e}", p.display()))?;
-        let (_jpeg, data_url) = compress_for_llm(&img).await?;
-        data_urls.push(data_url);
-    }
+    let data_urls = futures_join_paths(&all_paths).await?;
 
-    let n_displays = all_paths.len();
-    let display_note = if n_displays == 1 {
-        "这是用户 macOS 的屏幕截图（1 块屏幕）。".to_string()
-    } else {
-        format!(
-            "这是用户 macOS 多显示器在同一时刻的 {n_displays} 张截图（按显示器 1..{n_displays} 排列，第 1 张是主屏）。请综合所有屏幕理解用户当前活动。"
-        )
-    };
+    let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    let parsed = llm_summarize(cfg, &data_urls, all_paths.len(), &time_str).await;
 
-    let prompt = format!(
-        r#"{}请看截图，请严格按如下 JSON 输出（不要输出 JSON 以外的任何文字）：
-{{"summary5":["第一句","第二句","第三句","第四句","第五句"],"activity":"工作|学习|娱乐|社交|其他","app":"当前主应用名，无法判断则 unknown","project":"可见的项目/工作区名，无法判断则 unknown"}}
-其中 summary5 恰好 5 句话，每句不超过 30 字，用中文，客观描述用户正在做什么（如果多屏在同时做不同的事，请合并概括）。
-截图时间：{}。"#,
-        display_note,
-        now.format("%Y-%m-%d %H:%M:%S")
-    );
-
-    let mut llm_text = String::new();
-    let client = reqwest::Client::new();
-    // 3 attempts with exponential backoff — upstream 500s are transient
-    for attempt in 0..3 {
-        let msg = super::llm::multi_image_msg(&data_urls, &prompt);
-        match super::llm::chat(&client, cfg, &[msg]).await {
-            Ok(t) => {
-                llm_text = t;
-                break;
-            }
-            Err(e) => {
-                if attempt < 2 {
-                    eprintln!("llm attempt {} failed: {e}; retrying", attempt + 1);
-                    tokio::time::sleep(std::time::Duration::from_secs(
-                        u64::from(2u32.pow(attempt + 1) * 4),
-                    ))
-                    .await;
-                } else {
-                    eprintln!("llm failed after 3 attempts (frame saved without summary): {e}");
-                }
-            }
-        }
-    }
-
-    // parse JSON out of the (possibly messy) model output
-    let mut parsed = serde_json::Value::Null;
-    if let Some(start) = llm_text.find('{') {
-        if let Some(end) = llm_text.rfind('}') {
-            if end > start {
-                parsed =
-                    serde_json::from_str(&llm_text[start..=end]).unwrap_or(serde_json::Value::Null);
-            }
-        }
-    }
     let summary5: Vec<String> = parsed["summary5"]
         .as_array()
         .map(|a| {
