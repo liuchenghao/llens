@@ -8,8 +8,10 @@ use super::store::Config;
 pub struct Frame {
     /// ISO-8601 local time of the frame
     pub time: String,
-    /// relative path under data_root (screenshots/YYYY-MM/HHMMSS.png)
+    /// relative path under data_root (screenshots/YYYY-MM/HHMMSS.png) — main display
     pub image: String,
+    /// extra display screenshots, same layout as `image` (screenshots/YYYY-MM/HHMMSS_d2.png …)
+    pub extra_images: Vec<String>,
     /// exactly 5 short sentences from the model (empty if pending/failed)
     pub summary5: Vec<String>,
     /// 工作 | 学习 | 娱乐 | 社交 | 其他
@@ -53,41 +55,95 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         .join(now.format("%Y-%m").to_string());
     std::fs::create_dir_all(&shot_dir)
         .map_err(|e| format!("mkdir screenshots: {e}"))?;
-    let fname = now.format("%H%M%S").to_string() + ".png";
-    let shot_path = shot_dir.join(&fname);
+    let base_stem = now.format("%H%M%S").to_string();
 
-    // 1) screencapture (silent; TCC prompt on first run)
-    let out = std::process::Command::new("screencapture")
-        .arg("-x")
-        .arg(&shot_path)
-        .output()
-        .map_err(|e| format!("spawn screencapture: {e}"))?;
-    if !out.status.success() || !shot_path.exists() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(format!(
-            "screencapture failed (screen-recording permission?): {stderr}"
-        ));
+    /// Capture one display. display 1 is always the main display.
+    fn capture_display(shot_dir: &PathBuf, stem: &str, display: u32) -> Option<std::path::PathBuf> {
+        let fname = if display == 1 {
+            format!("{stem}.png")
+        } else {
+            format!("{stem}_d{display}.png")
+        };
+        let path = shot_dir.join(&fname);
+        let out = std::process::Command::new("screencapture")
+            .arg("-x")
+            .arg("-D")
+            .arg(display.to_string())
+            .arg(&path)
+            .output()
+            .ok()?;
+        if out.status.success() && path.exists() {
+            Some(path)
+        } else {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
     }
 
-    // 2) AI: 5-sentence summary + activity/app/project
-    // Compress to JPEG ≤1280px before encoding — the upstream LLM 500s on
-    // multi-MB PNG payloads (Retina 3x full-screen PNGs are 5-10MB).
-    let img = std::fs::read(&shot_path).map_err(|e| format!("read shot: {e}"))?;
-    let (_jpeg, data_url) = compress_for_llm(&img).await?;
+    // 1) Capture every connected display (1 = main; try up to 4 total).
+    // Multi-monitor: the user works across screens, so each display is
+    // captured into its own file and all images go to the LLM together.
+    let main_path = match capture_display(&shot_dir, &base_stem, 1) {
+        Some(p) => p,
+        None => {
+            // Fall back: -D 1 can fail on some systems; try bare -x.
+            let p = shot_dir.join(format!("{base_stem}.png"));
+            let out = std::process::Command::new("screencapture")
+                .arg("-x")
+                .arg(&p)
+                .output()
+                .map_err(|e| format!("spawn screencapture: {e}"))?;
+            if !out.status.success() || !p.exists() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(format!(
+                    "screencapture failed (screen-recording permission?): {stderr}"
+                ));
+            }
+            p
+        }
+    };
+    let mut extra_paths: Vec<std::path::PathBuf> = Vec::new();
+    for d in 2..=4u32 {
+        match capture_display(&shot_dir, &base_stem, d) {
+            Some(p) => extra_paths.push(p),
+            None => break, // displays are numbered sequentially; stop at the first gap
+        }
+    }
+
+    // 2) Compress every display to JPEG ≤1280px — upstream LLM 500s on
+    // multi-MB PNG payloads (Retina 3x full-screen PNGs are 5-10MB each).
+    let all_paths = std::iter::once(main_path.clone()).chain(extra_paths.clone()).collect::<Vec<_>>();
+    let mut data_urls: Vec<String> = Vec::new();
+    for p in &all_paths {
+        let img = std::fs::read(p).map_err(|e| format!("read shot {}: {e}", p.display()))?;
+        let (_jpeg, data_url) = compress_for_llm(&img).await?;
+        data_urls.push(data_url);
+    }
+
+    let n_displays = all_paths.len();
+    let display_note = if n_displays == 1 {
+        "这是用户 macOS 的屏幕截图（1 块屏幕）。".to_string()
+    } else {
+        format!(
+            "这是用户 macOS 多显示器在同一时刻的 {n_displays} 张截图（按显示器 1..{n_displays} 排列，第 1 张是主屏）。请综合所有屏幕理解用户当前活动。"
+        )
+    };
 
     let prompt = format!(
-        r#"你看一张 macOS 屏幕截图。请严格按如下 JSON 输出（不要输出 JSON 以外的任何文字）：
+        r#"{}请看截图，请严格按如下 JSON 输出（不要输出 JSON 以外的任何文字）：
 {{"summary5":["第一句","第二句","第三句","第四句","第五句"],"activity":"工作|学习|娱乐|社交|其他","app":"当前主应用名，无法判断则 unknown","project":"可见的项目/工作区名，无法判断则 unknown"}}
-其中 summary5 恰好 5 句话，每句不超过 30 字，用中文，客观描述用户正在做什么。
+其中 summary5 恰好 5 句话，每句不超过 30 字，用中文，客观描述用户正在做什么（如果多屏在同时做不同的事，请合并概括）。
 截图时间：{}。"#,
+        display_note,
         now.format("%Y-%m-%d %H:%M:%S")
     );
 
     let mut llm_text = String::new();
     let client = reqwest::Client::new();
-    // 3 attempts with exponential backoff (2s, 8s) — upstream 500s are transient
+    // 3 attempts with exponential backoff — upstream 500s are transient
     for attempt in 0..3 {
-        match super::llm::chat(&client, cfg, &[super::llm::image_msg(&data_url, &prompt)]).await {
+        let msg = super::llm::multi_image_msg(&data_urls, &prompt);
+        match super::llm::chat(&client, cfg, &[msg]).await {
             Ok(t) => {
                 llm_text = t;
                 break;
@@ -130,12 +186,20 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
     let app = parsed["app"].as_str().map(|s| s.to_string());
     let project = parsed["project"].as_str().map(|s| s.to_string());
 
+    let main_rel = format!(
+        "screenshots/{}/{base_stem}.png",
+        now.format("%Y-%m")
+    );
+    let extra_rels: Vec<String> = extra_paths
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .map(|fn2| format!("screenshots/{}/{}", now.format("%Y-%m"), fn2))
+        .collect();
+
     let frame = Frame {
         time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
-        image: format!(
-            "screenshots/{}/{}",
-            now.format("%Y-%m"), fname
-        ),
+        image: main_rel,
+        extra_images: extra_rels,
         summary5,
         activity,
         app,

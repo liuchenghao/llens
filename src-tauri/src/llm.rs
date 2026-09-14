@@ -49,6 +49,7 @@ pub fn system_msg(content: &str) -> LlmMsg {
     }
 }
 
+#[allow(dead_code)]
 pub fn image_msg(base64_data_url: &str, prompt: &str) -> LlmMsg {
     LlmMsg {
         role: "user".into(),
@@ -66,6 +67,27 @@ pub fn image_msg(base64_data_url: &str, prompt: &str) -> LlmMsg {
                 }),
             },
         ])),
+        images: vec![],
+    }
+}
+
+/// Multiple images (e.g. one per display) + one text prompt.
+pub fn multi_image_msg(data_urls: &[String], prompt: &str) -> LlmMsg {
+    let mut parts = vec![LlmPart {
+        kind: "text".into(),
+        text: Some(prompt.into()),
+        image_url: None,
+    }];
+    for url in data_urls {
+        parts.push(LlmPart {
+            kind: "image_url".into(),
+            text: None,
+            image_url: Some(LlmImageUrl { url: url.clone() }),
+        });
+    }
+    LlmMsg {
+        role: "user".into(),
+        content: Some(LlmContent::Multi(parts)),
         images: vec![],
     }
 }

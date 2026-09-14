@@ -26,6 +26,7 @@ fn test_hour_file_roundtrip() {
     let f = Frame {
         time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
         image: "screenshots/2025-09/180000.png".into(),
+        extra_images: vec![],
         summary5: vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
         activity: Some("工作".into()),
         app: Some("Xcode".into()),

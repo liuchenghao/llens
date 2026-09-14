@@ -6,6 +6,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 type Frame = {
   time: string
   image: string
+  extra_images?: string[]
   summary5: string[]
   activity?: string
   app?: string
