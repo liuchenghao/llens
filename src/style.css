@@ -1,5 +1,6 @@
-<style>
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -8,6 +9,8 @@ body,
 #app {
   height: 100%;
   margin: 0;
+  min-width: 0;
+  min-height: 0;
 }
 
 body {
@@ -16,13 +19,17 @@ body {
   color: #eef0ff;
   overflow: hidden;
   background: #05061a;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* full-window liquid background (image + gradient fallback) */
+/* ── root layout ──────────────────────────────────────────────────────────── */
+
 .app {
   position: relative;
   display: flex;
+  flex-direction: row;
   height: 100%;
+  min-height: 0;
   background: #05061a url('/lens_bg.jpg') center/cover no-repeat;
 }
 
@@ -35,9 +42,11 @@ body {
     radial-gradient(1000px 700px at 85% 85%, rgba(30, 120, 220, 0.3), transparent 60%),
     rgba(4, 6, 20, 0.55);
   pointer-events: none;
+  z-index: 0;
 }
 
-/* glass surface */
+/* ── glass surface ────────────────────────────────────────────────────────── */
+
 .glass {
   background: rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(24px) saturate(160%);
@@ -48,16 +57,28 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
-/* layout */
+/* ── sidebar ──────────────────────────────────────────────────────────────── */
+
 .nav {
   position: relative;
   z-index: 2;
   width: 210px;
+  min-width: 160px;
   margin: 14px;
   padding: 18px 14px;
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.nav::-webkit-scrollbar {
+  width: 4px;
+}
+.nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
 }
 
 .logo {
@@ -68,11 +89,13 @@ body {
   font-size: 17px;
   letter-spacing: 0.18em;
   padding: 4px 8px;
+  white-space: nowrap;
 }
 
 .logo-dot {
   width: 12px;
   height: 12px;
+  min-width: 12px;
   border-radius: 50%;
   background: #5a5f8a;
   transition: all 0.3s;
@@ -109,6 +132,8 @@ body {
   font-size: 15px;
   cursor: pointer;
   transition: all 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  white-space: nowrap;
+  text-align: left;
 }
 
 .tab:hover {
@@ -126,7 +151,9 @@ body {
 .tab-icon {
   font-size: 16px;
   width: 20px;
+  min-width: 20px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .status {
@@ -146,6 +173,7 @@ body {
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .rec-btn.on {
@@ -163,20 +191,25 @@ body {
   padding: 0 4px;
 }
 
-/* content */
+/* ── content area ─────────────────────────────────────────────────────────── */
+
 .content {
   position: relative;
   z-index: 1;
   flex: 1;
+  min-width: 0;        /* allow flex child to shrink below content width */
+  min-height: 0;
   margin: 14px;
   padding: 22px;
   overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .content::-webkit-scrollbar {
   width: 8px;
 }
-
 .content::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 4px;
@@ -187,11 +220,13 @@ h1.page {
   font-weight: 700;
   margin: 0 0 18px;
   letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
 .card {
   padding: 18px;
   margin-bottom: 16px;
+  min-width: 0;
 }
 
 .card h3 {
@@ -212,6 +247,7 @@ h1.page {
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #d5d9f5;
   margin: 2px 4px 2px 0;
+  white-space: nowrap;
 }
 
 .chip.warn {
@@ -225,23 +261,32 @@ h1.page {
   font-size: 13px;
 }
 
+/* ── responsive grids ─────────────────────────────────────────────────────── */
+
 .row {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
 }
 
+.row > * {
+  min-width: 200px;   /* cards don't collapse to zero */
+  flex: 1 1 240px;
+}
+
 .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
 }
 
 .grid3 {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
 }
+
+/* ── buttons / inputs ─────────────────────────────────────────────────────── */
 
 button.btn {
   padding: 9px 18px;
@@ -252,6 +297,7 @@ button.btn {
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 button.btn:hover {
@@ -261,6 +307,11 @@ button.btn:hover {
 button.btn.primary {
   background: rgba(90, 140, 255, 0.28);
   border-color: rgba(90, 140, 255, 0.6);
+}
+
+button.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 input,
@@ -274,6 +325,7 @@ select {
   font-size: 14px;
   font-family: inherit;
   width: 100%;
+  min-width: 0;
 }
 
 input:focus,
@@ -282,4 +334,63 @@ select:focus {
   outline: none;
   border-color: rgba(90, 140, 255, 0.6);
   background: rgba(255, 255, 255, 0.09);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* ── narrow window: hide sidebar, top-nav mode ───────────────────────────── */
+
+@media (max-width: 1060px) {
+  .app {
+    flex-direction: column;
+  }
+  .nav {
+    width: auto;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin: 0 0 0 0;
+  }
+  .logo { padding: 4px 0; }
+  .nav nav {
+    flex-direction: row;
+    gap: 4px;
+    flex: 1;
+  }
+  .tab {
+    padding: 8px 12px;
+    font-size: 13px;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+  .tab-icon { width: auto; min-width: 0; }
+  .status {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    border-top: none;
+    padding-top: 0;
+    padding-left: 8px;
+  }
+  .rec-btn { padding: 7px 10px; font-size: 12px; }
+  .data-root { max-width: 160px; }
+  .content {
+    margin: 0 14px 14px 14px;
+    padding: 16px;
+  }
+}
+
+@media (max-width: 700px) {
+  h1.page { font-size: 18px; }
+  .card { padding: 14px; }
+  .content { padding: 12px; }
+  .nav { gap: 8px; padding: 10px 12px; }
+  .tab { padding: 6px 10px; font-size: 12px; }
 }

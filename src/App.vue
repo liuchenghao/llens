@@ -74,7 +74,7 @@ async function setRecording(on: boolean) {
       </div>
     </aside>
 
-    <main class="content">
+    <main class="glass content">
       <Overview v-if="active === 'overview'" />
       <Diary v-else-if="active === 'diary'" />
       <Board v-else-if="active === 'board'" />

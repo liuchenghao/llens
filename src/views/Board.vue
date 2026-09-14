@@ -360,7 +360,7 @@ const kpi = computed(() => ({
       <div ref="elTrend" class="cv"></div>
     </div>
 
-    <div class="glass card" style="text-align:center; margin-top: 8px">
+    <div class="glass card" style="text-align:right; margin-top: 8px">
       <button class="btn primary" @click="load" :style="{ margin: '0 auto' }">重新加载</button>
     </div>
   </div>
