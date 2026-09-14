@@ -118,9 +118,12 @@ pub fn get_diary(day: String) -> Result<Option<Diary>, String> {
     Ok(crate::diary::load(&root(), d))
 }
 
-/// All diary dates that exist on disk.
+/// All diary dates that exist on disk, filtered to the configured lookback window.
 #[tauri::command]
 pub fn list_diary_dates() -> Vec<String> {
+    let cfg = cfg();
+    let today = chrono::Local::now().date_naive();
+    let min_day = today - chrono::Duration::days(cfg.diary_lookback_days as i64);
     let mut out = Vec::new();
     let dir = root().join("diary");
     if let Ok(months) = std::fs::read_dir(&dir) {
@@ -132,7 +135,12 @@ pub fn list_diary_dates() -> Vec<String> {
                 for d in days.flatten() {
                     if d.path().extension().map(|x| x == "json").unwrap_or(false) {
                         if let Some(s) = d.file_name().to_str() {
-                            out.push(s.trim_end_matches(".json").to_string());
+                            let date_str = s.trim_end_matches(".json").to_string();
+                            if let Ok(nd) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+                                if nd >= min_day {
+                                    out.push(date_str);
+                                }
+                            }
                         }
                     }
                 }

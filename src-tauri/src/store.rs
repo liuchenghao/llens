@@ -13,6 +13,8 @@ pub struct Config {
     pub base_url: String,
     pub model: String,
     pub recording_enabled: bool,
+    /// How many days back to auto-generate diaries (0 = today only, 1 = today + yesterday, etc.)
+    pub diary_lookback_days: u32,
 }
 
 impl Default for Config {
@@ -22,6 +24,7 @@ impl Default for Config {
             base_url: "https://apihub.agnes-ai.com/v1".into(),
             model: "agnes-3.0-flash".into(),
             recording_enabled: true,
+            diary_lookback_days: 1,
         }
     }
 }

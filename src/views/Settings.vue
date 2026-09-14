@@ -7,6 +7,7 @@ type Cfg = {
   base_url: string
   model: string
   recording_enabled: boolean
+  diary_lookback_days: number
 }
 
 const cfg = ref<Cfg>({
@@ -14,6 +15,7 @@ const cfg = ref<Cfg>({
   base_url: '',
   model: '',
   recording_enabled: true,
+  diary_lookback_days: 1,
 })
 const saved = ref(false)
 const err = ref('')
@@ -48,6 +50,15 @@ async function save() {
       <label style="display:flex; align-items:center; gap:8px">
         <input type="checkbox" v-model="cfg.recording_enabled" style="width:auto" /> 允许后台截屏
       </label>
+      <label>日记自动回溯天数（0=仅今天，1=今天+昨天，以此类推）</label>
+      <input
+        v-model.number="cfg.diary_lookback_days"
+        type="number"
+        min="0"
+        max="30"
+        style="max-width: 80px; display: inline-block"
+      />
+      <div class="muted" style="font-size:11px; margin-top:2px">影响日记页打开时自动补跑的范围</div>
 
       <div style="margin-top: 16px; display:flex; gap:10px; align-items:center">
         <button class="btn primary" @click="save">保存</button>

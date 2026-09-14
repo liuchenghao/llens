@@ -68,22 +68,19 @@ pub fn save(root: &PathBuf, diary: &Diary) -> Result<(), String> {
 }
 
 /// Dates that have data (any 10-min summary) but no finished diary.
-pub fn pending_days(root: &PathBuf, up_to: NaiveDate) -> Vec<NaiveDate> {
+/// Only looks back `lookback_days` days from `up_to` (inclusive).
+pub fn pending_days(root: &PathBuf, up_to: NaiveDate, lookback_days: u32) -> Vec<NaiveDate> {
     let mut out = Vec::new();
     let mut d = up_to;
-    for _ in 0..366 {
-        if d < NaiveDate::from_ymd_opt(2020, 1, 1).unwrap() {
-            break;
-        }
+    for i in 0..=lookback_days as i64 {
         let has_data = !super::store::list_t10_range(root, d, d + chrono::Duration::days(1)).is_empty();
         let diary_done = load(root, d).map(|x| x.status == "done").unwrap_or(false);
         if has_data && !diary_done {
             out.push(d);
         }
+        if i == lookback_days as i64 { break; }
         d = d - chrono::Duration::days(1);
-        if out.len() > 14 {
-            break;
-        }
+        if out.len() > 14 { break; }
     }
     out
 }
@@ -181,13 +178,13 @@ pub async fn generate_day(
     Ok(diary)
 }
 
-/// Re-run all pending days (oldest first), up to `limit`.
+/// Re-run all pending days within the lookback window (oldest first), up to `limit`.
 pub async fn regenerate_pending(
     root: &PathBuf,
     cfg: &super::store::Config,
     limit: usize,
 ) -> Vec<Diary> {
-    let days = pending_days(root, Local::now().date_naive());
+    let days = pending_days(root, Local::now().date_naive(), cfg.diary_lookback_days);
     let mut out = Vec::new();
     for d in days.into_iter().rev().take(limit) {
         match generate_day(root, cfg, d).await {

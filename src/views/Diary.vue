@@ -18,13 +18,8 @@ const today = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const yesterday = () => {
-  const d = new Date()
-  d.setDate(d.getDate() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
-const selected = ref(yesterday())
+const selected = ref<string | null>(null)   // resolved after loadDiaryDates
 const diary = ref<Diary | null>(null)
 const busy = ref(false)
 const msg = ref('')
@@ -66,6 +61,7 @@ function fmt(d: Date) {
 const hasDiary = computed(() => new Set(dates.value))
 
 async function loadDiary() {
+  if (!selected.value) return
   msg.value = ''
   diary.value = null
   busy.value = true
@@ -74,7 +70,7 @@ async function loadDiary() {
     if (d) {
       diary.value = d
     } else {
-      // no diary yet -> trigger regeneration for pending days
+      // no diary yet -> trigger regeneration (respects diary_lookback_days config)
       await invoke('regenerate_diaries', { limit: 5 }).catch(() => {})
       const d2 = await invoke<Diary | null>('get_diary', { day: selected.value })
       diary.value = d2
@@ -91,8 +87,19 @@ async function loadDiary() {
 }
 
 onMounted(async () => {
+  // pick the most recent date that has a diary, or today if none
+  dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
+  if (dates.value.length) {
+    const sorted = [...dates.value].sort().reverse()
+    selected.value = sorted[0]
+  } else {
+    selected.value = today()
+  }
+  // also shift the calendar to the month of the selected day
+  const [y, m] = selected.value.split('-').map(Number)
+  year.value = y
+  month.value = m - 1
   await loadDiary()
-  // auto-catch-up on open (already triggered above for the selected day)
 })
 
 function pickDate(day: string, inMonth: boolean) {
@@ -145,7 +152,7 @@ function shiftMonth(delta: number) {
 
       <div class="glass card" style="flex: 1.4">
         <div class="diary-head">
-          <h3>{{ selected }} 的日记</h3>
+          <h3>{{ selected || '…' }} 的日记</h3>
           <span v-if="busy" class="muted">生成中…</span>
           <span v-else-if="msg" class="chip warn">{{ msg }}</span>
         </div>
