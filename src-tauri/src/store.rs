@@ -133,10 +133,16 @@ pub struct T10 {
 }
 
 pub fn sum_file_for(root: &PathBuf, now: &DateTime<Local>, bucket: i64) -> PathBuf {
+    let start = chrono::DateTime::from_timestamp(bucket, 0)
+        .map(|t| t.with_timezone(&Local))
+        .unwrap_or(*now);
+    let month = start.format("%Y-%m").to_string();
+    let hour = start.format("%H").to_string();
     let n = bucket / 600;
-    root.join("summaries")
-        .join(now.format("%Y-%m").to_string())
-        .join(format!("{}_10min_{n}.json", now.format("%H")))
+    root
+        .join("summaries")
+        .join(&month)
+        .join(format!("{hour}_10min_{n}.json"))
 }
 
 /// Collect frames of one 10-min slice from the hour JSON files and write a summary.
@@ -304,25 +310,48 @@ fn day_midnight(d: &NaiveDate) -> chrono::DateTime<Local> {
         .unwrap()
 }
 
-/// All T10 summaries in a date range.
+/// All T10 summaries in a date range. Files are stored in month dirs, so we
+/// read every month dir that overlaps the range and keep only slices whose
+/// bucket timestamp falls in [start_day, end_day_excl).
 pub fn list_t10_range(
     root: &PathBuf,
     start_day: NaiveDate,
     end_day_excl: NaiveDate,
 ) -> Vec<T10> {
-    let mut out = Vec::new();
+    let start_ts = start_day
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local::now())
+        .timestamp();
+    let end_ts = end_day_excl
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local::now())
+        .timestamp();
+
+    let mut out: Vec<T10> = Vec::new();
+    let mut seen_months: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut d = start_day;
     while d < end_day_excl {
         let month = d.format("%Y-%m").to_string();
         let dir = root.join("summaries").join(&month);
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.extension().map(|x| x == "json").unwrap_or(false) {
-                    if let Ok(s) = std::fs::read_to_string(&p) {
-                        if let Ok(t) = serde_json::from_str::<T10>(&s) {
-                            if t.frame_count > 0 || !t.narrative.is_empty() {
-                                out.push(t);
+        if seen_months.insert(month.clone()) {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.extension().map(|x| x == "json").unwrap_or(false) {
+                        if let Ok(s) = std::fs::read_to_string(&p) {
+                            if let Ok(t) = serde_json::from_str::<T10>(&s) {
+                                if t.bucket >= start_ts
+                                    && t.bucket < end_ts
+                                    && (t.frame_count > 0 || !t.narrative.is_empty())
+                                {
+                                    out.push(t);
+                                }
                             }
                         }
                     }

@@ -103,12 +103,34 @@ pub async fn generate_day(
     cfg: &super::store::Config,
     day: NaiveDate,
 ) -> Result<Diary, String> {
+    regenerate_day(root, cfg, day, false).await
+}
+
+/// Regenerate the diary for a single day. If `force` is true, ignore
+/// "already done" status and always re-run the LLM.
+pub async fn regenerate_day(
+    root: &PathBuf,
+    cfg: &super::store::Config,
+    day: NaiveDate,
+    force: bool,
+) -> Result<Diary, String> {
     let slices =
         super::store::list_t10_range(root, day, day + chrono::Duration::days(1));
     if slices.is_empty() {
-        let p = Diary::new_pending(day);
-        save(root, &p)?;
-        return Ok(p);
+        if !force {
+            let p = Diary::new_pending(day);
+            save(root, &p)?;
+            return Ok(p);
+        }
+        return Err(format!("no 10-min data for {day}"));
+    }
+    // Non-force fast path: if diary already exists and is fresh, skip.
+    if !force {
+        if let Some(existing) = load(root, day) {
+            if existing.status == "done" && existing.source.len() >= slices.len() {
+                return Ok(existing);
+            }
+        }
     }
     let mut corpus = Vec::new();
     for s in &slices {

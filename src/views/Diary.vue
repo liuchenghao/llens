@@ -66,14 +66,31 @@ async function loadDiary() {
   diary.value = null
   busy.value = true
   try {
-    // Always run the (cheap, idempotent) regenerate pass first: it only
-    // re-generates days that are missing or stale (10-min data has grown
-    // since the diary was written). A fresh day is a no-op.
+    // 按选中日期做增量更新：只补生成过期或缺失的日记，已最新的是 no-op
     await invoke('regenerate_diaries', { limit: 5 }).catch(() => {})
     const d = await invoke<Diary | null>('get_diary', { day: selected.value })
     diary.value = d
     if (!d) {
       msg.value = '该天暂无 10 分钟汇总数据，无法生成日记。'
+    }
+  } catch (e: any) {
+    msg.value = String(e)
+  } finally {
+    busy.value = false
+    dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
+  }
+}
+
+// 强制刷新：按选中日期无条件重跑 LLM，覆盖已有日记
+async function forceUpdate() {
+  if (!selected.value) return
+  msg.value = ''
+  busy.value = true
+  try {
+    const d = await invoke<Diary>('force_regenerate_day', { day: selected.value })
+    diary.value = d
+    if (!d || !d.source?.length) {
+      msg.value = '该天暂无 10 分钟数据，无法生成日记。'
     }
   } catch (e: any) {
     msg.value = String(e)
@@ -143,7 +160,10 @@ function shiftMonth(delta: number) {
         </div>
         <div class="cal-legend">
           <span class="muted"><span class="dot-mark big" /> 已有日记</span>
-          <button class="btn" @click="loadDiary" :disabled="busy">刷新</button>
+          <div style="display:flex; gap:8px; align-items:center">
+            <button class="btn" @click="loadDiary" :disabled="busy">刷新</button>
+            <button class="btn primary" @click="forceUpdate" :disabled="busy">更新</button>
+          </div>
         </div>
       </div>
 
@@ -177,7 +197,7 @@ function shiftMonth(delta: number) {
             数据源：{{ diary.source.length }} 个 10 分钟片段
           </div>
         </template>
-        <div v-else-if="diary" class="muted">日记尚未生成，点击右上角「刷新」重试。</div>
+        <div v-else-if="diary" class="muted">日记尚未生成，点击「刷新」或「更新」重试。</div>
         <div v-else class="muted">暂无日记</div>
       </div>
     </div>

@@ -183,6 +183,15 @@ pub fn get_diary(day: String) -> Result<Option<Diary>, String> {
     Ok(crate::diary::load(&root(), d))
 }
 
+/// Force-regenerate a specific day's diary (always re-runs the LLM),
+/// ignoring whether it was already done. This is what the diary UI
+/// "update" button uses.
+#[tauri::command]
+pub async fn force_regenerate_day(day: String) -> Result<Diary, String> {
+    let d = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    crate::diary::regenerate_day(&root(), &cfg(), d, true).await
+}
+
 /// All diary dates that exist on disk, filtered to the configured lookback window.
 #[tauri::command]
 pub fn list_diary_dates() -> Vec<String> {

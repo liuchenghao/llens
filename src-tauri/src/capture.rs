@@ -303,6 +303,15 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
     let sfile = super::store::sum_file_for(data_root, &now, bucket);
     if !sfile.exists() {
         let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
+        // Auto-regenerate stale diaries in the background so the diary view
+        // updates without the user having to click refresh. The check is
+        // cheap: it only re-runs the LLM for days whose 10-min slice count
+        // has grown since the last diary generation.
+        let cfg_clone = cfg.clone();
+        let root_clone = data_root.clone();
+        tokio::spawn(async move {
+            let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3).await;
+        });
     }
 
     Ok(frame)
