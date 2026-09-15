@@ -66,17 +66,14 @@ async function loadDiary() {
   diary.value = null
   busy.value = true
   try {
+    // Always run the (cheap, idempotent) regenerate pass first: it only
+    // re-generates days that are missing or stale (10-min data has grown
+    // since the diary was written). A fresh day is a no-op.
+    await invoke('regenerate_diaries', { limit: 5 }).catch(() => {})
     const d = await invoke<Diary | null>('get_diary', { day: selected.value })
-    if (d) {
-      diary.value = d
-    } else {
-      // no diary yet -> trigger regeneration (respects diary_lookback_days config)
-      await invoke('regenerate_diaries', { limit: 5 }).catch(() => {})
-      const d2 = await invoke<Diary | null>('get_diary', { day: selected.value })
-      diary.value = d2
-      if (!d2) {
-        msg.value = '该天暂无 10 分钟汇总数据，无法生成日记。'
-      }
+    diary.value = d
+    if (!d) {
+      msg.value = '该天暂无 10 分钟汇总数据，无法生成日记。'
     }
   } catch (e: any) {
     msg.value = String(e)

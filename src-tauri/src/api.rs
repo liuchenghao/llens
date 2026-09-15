@@ -64,6 +64,71 @@ pub fn data_root() -> String {
     root().to_string_lossy().to_string()
 }
 
+/// Read a screenshot file and return its contents as a base64 data-URL.
+/// Works regardless of asset-protocol scope, so image display survives
+/// a user-changed data directory.
+#[tauri::command]
+pub fn read_image_as_data_url(path: String) -> Result<String, String> {
+    let pb = std::path::Path::new(&path);
+    if !pb.exists() {
+        return Err(format!("file not found: {path}"));
+    }
+    let bytes = std::fs::read(pb).map_err(|e| format!("read failed: {e}"))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let ext = pb
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+/// Change the data directory. Persists override to <default_root>/data_root.txt
+/// and immediately switches the running app to use it.
+#[tauri::command]
+pub fn set_data_root(new_path: String) -> Result<String, String> {
+    let new_path = new_path.trim().to_string();
+    if new_path.is_empty() {
+        return Err("path cannot be empty".into());
+    }
+    let new_pb = std::path::PathBuf::from(&new_path);
+    // Expand ~ if needed
+    let new_pb = if new_path.starts_with('~') {
+        let rest = new_path.strip_prefix('~').unwrap_or("");
+        std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(rest))
+            .unwrap_or(new_pb.clone())
+    } else {
+        new_pb
+    };
+    std::fs::create_dir_all(&new_pb)
+        .map_err(|e| format!("cannot create directory {:?}: {e}", new_pb))?;
+    let default_root = crate::store::default_data_root();
+    let p = default_root.join("data_root.txt");
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, new_pb.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
+    Ok(new_pb.to_string_lossy().to_string())
+}
+
+/// Reset the data directory back to the default (~/.screenlog).
+#[tauri::command]
+pub fn reset_data_root() -> Result<String, String> {
+    let p = crate::store::default_data_root().join("data_root.txt");
+    let _ = std::fs::remove_file(&p);
+    Ok(crate::store::default_data_root().to_string_lossy().to_string())
+}
+
 #[derive(Serialize)]
 pub struct RangeData {
     pub frames: Vec<Frame>,

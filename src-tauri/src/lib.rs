@@ -26,6 +26,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             api::get_status,
             api::data_root,
+            api::read_image_as_data_url,
+            api::set_data_root,
+            api::reset_data_root,
             api::set_recording,
             api::get_config,
             api::save_config,

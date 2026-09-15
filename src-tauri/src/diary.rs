@@ -67,15 +67,27 @@ pub fn save(root: &PathBuf, diary: &Diary) -> Result<(), String> {
     Ok(())
 }
 
-/// Dates that have data (any 10-min summary) but no finished diary.
-/// Only looks back `lookback_days` days from `up_to` (inclusive).
+/// A day is "pending" if it has 10-min data and either has no diary, or the
+/// diary is stale (fewer source slices than currently available — the day's
+/// data has grown since the diary was generated).
 pub fn pending_days(root: &PathBuf, up_to: NaiveDate, lookback_days: u32) -> Vec<NaiveDate> {
     let mut out = Vec::new();
     let mut d = up_to;
     for i in 0..=lookback_days as i64 {
-        let has_data = !super::store::list_t10_range(root, d, d + chrono::Duration::days(1)).is_empty();
-        let diary_done = load(root, d).map(|x| x.status == "done").unwrap_or(false);
-        if has_data && !diary_done {
+        let slices = super::store::list_t10_range(root, d, d + chrono::Duration::days(1));
+        let has_data = !slices.is_empty();
+        let stale = match load(root, d) {
+            None => true, // no diary yet
+            Some(diary) => {
+                if diary.status != "done" {
+                    true
+                } else {
+                    // done diary: stale if fewer source slices than current data
+                    diary.source.len() < slices.len()
+                }
+            }
+        };
+        if has_data && stale {
             out.push(d);
         }
         if i == lookback_days as i64 { break; }

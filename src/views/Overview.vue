@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { convertFileSrc } from '@tauri-apps/api/core'
 
 type Frame = {
   time: string
@@ -18,16 +17,38 @@ const loading = ref(false)
 const errMsg = ref('')
 const dataRoot = ref('')
 const retrying = ref<Set<string>>(new Set())
-
-// image preview modal
 const previewFrame = ref<Frame | null>(null)
 
-function openPreview(f: Frame) {
-  previewFrame.value = f
+// image cache: abs path -> data URL (sync read, async fill)
+const imgUrls = ref<Record<string, string>>({})
+
+function absOf(rel: string): string {
+  return rel.startsWith('/') ? rel : `${dataRoot.value}/${rel}`
 }
-function closePreview() {
-  previewFrame.value = null
+// Sync: returns cached URL or a 1×1 transparent placeholder.
+function imgSrc(rel: string): string {
+  return imgUrls.value[absOf(rel)] || 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
 }
+// Fill the cache with base64 data URLs via Tauri command (works with any data root).
+async function preloadImages() {
+  const toLoad: string[] = []
+  for (const f of frames.value) {
+    if (f.image && !imgUrls.value[absOf(f.image)]) toLoad.push(f.image)
+    for (const extra of f.extra_images || []) {
+      if (!imgUrls.value[absOf(extra)]) toLoad.push(extra)
+    }
+  }
+  for (const rel of toLoad) {
+    try {
+      const url = await invoke<string>('read_image_as_data_url', { path: absOf(rel) })
+      imgUrls.value[absOf(rel)] = url
+    } catch { /* placeholder remains */ }
+  }
+  imgUrls.value = { ...imgUrls.value } // trigger reactivity
+}
+
+function openPreview(f: Frame) { previewFrame.value = f }
+function closePreview() { previewFrame.value = null }
 
 async function retrySummary(f: Frame) {
   if (retrying.value.has(f.time)) return
@@ -35,9 +56,9 @@ async function retrySummary(f: Frame) {
   try {
     const day = f.time.slice(0, 10)
     const updated = await invoke<Frame>('retry_frame_summary', { day, time: f.time })
-    // update the frame in place
     const idx = frames.value.findIndex((x) => x.time === f.time)
     if (idx >= 0) frames.value[idx] = updated
+    await preloadImages()
   } catch (e: any) {
     errMsg.value = `重新生成失败：${String(e)}`
   } finally {
@@ -49,10 +70,11 @@ async function load() {
   loading.value = true
   errMsg.value = ''
   try {
-    if (!dataRoot.value) dataRoot.value = await invoke<string>('data_root')
+    dataRoot.value = await invoke<string>('data_root')
     const day = new Date()
     const d = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
     frames.value = await invoke<Frame[]>('list_day', { day: d })
+    await preloadImages()
   } catch (e: any) {
     errMsg.value = String(e)
   } finally {
@@ -71,11 +93,6 @@ const byActivity = computed(() => {
   }
   return Object.entries(m).sort((a, b) => b[1] - a[1])
 })
-
-function imgSrc(rel: string) {
-  const abs = rel.startsWith('/') ? rel : `${dataRoot.value}/${rel}`
-  return convertFileSrc(abs)
-}
 </script>
 
 <template>

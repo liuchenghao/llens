@@ -20,11 +20,9 @@ impl AppState {
         }
     }
 
-    /// Data root: ~/.screenlog
+    /// Data root: user-overridable; defaults to ~/.screenlog.
     pub fn data_root() -> PathBuf {
-        std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".screenlog"))
-            .unwrap_or_else(|_| PathBuf::from("./.screenlog"))
+        super::store::current_data_root()
     }
 
     pub fn status(&self) -> Status {

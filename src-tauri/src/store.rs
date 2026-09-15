@@ -3,6 +3,27 @@ use serde::{Deserialize, Serialize};
 use super::capture::Frame;
 use chrono::{DateTime, Duration, Local, NaiveDate};
 
+/// Default data directory: ~/.screenlog
+pub fn default_data_root() -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("~"));
+    home.join(".screenlog")
+}
+
+/// Read a user-set data root override (stored at the default root as data_root.txt).
+fn read_data_root_override() -> Option<PathBuf> {
+    let p = default_data_root().join("data_root.txt");
+    std::fs::read_to_string(&p)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Current effective data root: override file > default.
+pub fn current_data_root() -> PathBuf {
+    read_data_root_override().unwrap_or_else(default_data_root)
+}
+
 // ---------- Config ----------
 
 /// User-editable app config, persisted at <data_root>/config.json.
