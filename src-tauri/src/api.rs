@@ -192,6 +192,17 @@ pub async fn force_regenerate_day(day: String) -> Result<Diary, String> {
     crate::diary::regenerate_day(&root(), &cfg(), d, true).await
 }
 
+/// Smart-regenerate a single day: if the day's 10-min data has grown since
+/// the last diary generation, re-run the LLM; otherwise just return the
+/// existing diary (cheap fast path, no LLM call). This is what the diary
+/// UI calls on date-click so a freshly-arrived 10-min slice auto-refreshes
+/// the day without the user having to click "refresh".
+#[tauri::command]
+pub async fn smart_regenerate_day(day: String) -> Result<Diary, String> {
+    let d = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    crate::diary::regenerate_day(&root(), &cfg(), d, false).await
+}
+
 /// All diary dates that exist on disk, filtered to the configured lookback window.
 #[tauri::command]
 pub fn list_diary_dates() -> Vec<String> {

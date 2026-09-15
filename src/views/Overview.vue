@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 type Frame = {
@@ -19,6 +19,122 @@ const dataRoot = ref('')
 const retrying = ref<Set<string>>(new Set())
 const previewFrame = ref<Frame | null>(null)
 
+// 筛选条件（已应用——点「搜索」后生效）
+const filterActivity = ref<string>('')
+const filterApp = ref<string>('')
+const filterProject = ref<string>('')
+const filterKeyword = ref<string>('')
+
+// 草稿筛选条件（下拉框/输入框绑定的中间值，点「搜索」才应用到 filterXxx）
+const draftActivity = ref<string>('')
+const draftApp = ref<string>('')
+const draftProject = ref<string>('')
+const draftKeyword = ref<string>('')
+
+// 是否有任何待应用的草稿
+const hasDraft = computed(() =>
+  draftActivity.value !== filterActivity.value ||
+  draftApp.value !== filterApp.value ||
+  draftProject.value !== filterProject.value ||
+  draftKeyword.value !== filterKeyword.value
+)
+
+function applySearch() {
+  filterActivity.value = draftActivity.value
+  filterApp.value = draftApp.value
+  filterProject.value = draftProject.value
+  filterKeyword.value = draftKeyword.value
+  page.value = 1
+}
+function resetFilters() {
+  filterActivity.value = ''
+  filterApp.value = ''
+  filterProject.value = ''
+  filterKeyword.value = ''
+  draftActivity.value = ''
+  draftApp.value = ''
+  draftProject.value = ''
+  draftKeyword.value = ''
+  page.value = 1
+}
+
+// 分页
+const PAGE_SIZE = 20
+const page = ref(1)
+const totalPages = ref(1)
+
+// 筛选后的全量结果（用于分页 + 统计）
+const filtered = computed(() => {
+  let list = frames.value
+  if (filterActivity.value) list = list.filter(f => f.activity === filterActivity.value)
+  if (filterApp.value) list = list.filter(f => f.app === filterApp.value)
+  if (filterProject.value) list = list.filter(f => f.project === filterProject.value)
+  if (filterKeyword.value.trim()) {
+    const kw = filterKeyword.value.trim().toLowerCase()
+    list = list.filter(f =>
+      (f.summary5 || []).some(s => s.toLowerCase().includes(kw)) ||
+      (f.app || '').toLowerCase().includes(kw) ||
+      (f.project || '').toLowerCase().includes(kw)
+    )
+  }
+  return list
+})
+const pagedFrames = computed(() => {
+  const total = filtered.value.length
+  totalPages.value = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  if (page.value > totalPages.value) page.value = totalPages.value
+  const start = (page.value - 1) * PAGE_SIZE
+  return filtered.value.slice(start, start + PAGE_SIZE).reverse()
+})
+
+// 可筛选的候选值（从全量帧中提取，去重）
+function collectOpts(get: (f: Frame) => string | undefined): string[] {
+  return [...new Set(frames.value.map(get).filter((s): s is string => !!s))].sort()
+}
+const activityOptions = computed<string[]>(() => collectOpts(f => f.activity))
+const appOptions = computed<string[]>(() => collectOpts(f => f.app))
+const projectOptions = computed<string[]>(() => collectOpts(f => f.project))
+
+// 可搜索下拉框
+const selectOpen = ref<'app' | 'project' | 'activity' | null>(null)
+const selectQuery = ref('')
+function openSelect(key: 'app' | 'project' | 'activity') {
+  selectOpen.value = key
+  selectQuery.value = ''
+  nextTick(() => {
+    const el = document.querySelector('.ss-input') as HTMLInputElement | null
+    if (el) el.focus()
+  })
+}
+function closeSelect() { selectOpen.value = null }
+function pickApp(v: string) {
+  draftApp.value = draftApp.value === v ? '' : v
+  selectOpen.value = null
+}
+function pickProject(v: string) {
+  draftProject.value = draftProject.value === v ? '' : v
+  selectOpen.value = null
+}
+function pickActivity(v: string) {
+  draftActivity.value = draftActivity.value === v ? '' : v
+  selectOpen.value = null
+}
+function filteredAppOptions() {
+  const q = selectQuery.value.trim().toLowerCase()
+  const opts = appOptions.value
+  return q ? opts.filter((o) => o.toLowerCase().includes(q)) : opts
+}
+function filteredProjectOptions() {
+  const q = selectQuery.value.trim().toLowerCase()
+  const opts = projectOptions.value
+  return q ? opts.filter((o) => o.toLowerCase().includes(q)) : opts
+}
+function filteredActivityOptions() {
+  const q = selectQuery.value.trim().toLowerCase()
+  const opts = activityOptions.value
+  return q ? opts.filter((o) => o.toLowerCase().includes(q)) : opts
+}
+
 // image cache: abs path -> data URL (sync read, async fill)
 const imgUrls = ref<Record<string, string>>({})
 
@@ -30,14 +146,17 @@ function imgSrc(rel: string): string {
   return imgUrls.value[absOf(rel)] || 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
 }
 // Fill the cache with base64 data URLs via Tauri command (works with any data root).
+// Only preloads images for the currently visible page to avoid loading hundreds
+// of data URLs at once when the day has many frames.
 async function preloadImages() {
   const toLoad: string[] = []
-  for (const f of frames.value) {
+  for (const f of pagedFrames.value) {
     if (f.image && !imgUrls.value[absOf(f.image)]) toLoad.push(f.image)
     for (const extra of f.extra_images || []) {
       if (!imgUrls.value[absOf(extra)]) toLoad.push(extra)
     }
   }
+  if (!toLoad.length) return
   for (const rel of toLoad) {
     try {
       const url = await invoke<string>('read_image_as_data_url', { path: absOf(rel) })
@@ -74,16 +193,31 @@ async function load() {
     const day = new Date()
     const d = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
     frames.value = await invoke<Frame[]>('list_day', { day: d })
-    await preloadImages()
+    // 重新拉取帧后，把草稿同步为当前已应用的筛选，避免下拉框显示过期的选中值
+    draftActivity.value = filterActivity.value
+    draftApp.value = filterApp.value
+    draftProject.value = filterProject.value
+    draftKeyword.value = filterKeyword.value
   } catch (e: any) {
     errMsg.value = String(e)
   } finally {
     loading.value = false
   }
+  await preloadImages()
+}
+
+// 「更新」按钮：刷新帧数据并重新提取下拉框候选值
+function refreshOptions() {
+  load()
 }
 
 onMounted(load)
 setInterval(load, 30000)
+
+// 翻页或已应用筛选变化后，确保新可见页的图已加载（草稿变化不触发）
+watch([page, filterActivity, filterApp, filterProject, filterKeyword], () => {
+  preloadImages().catch(() => {})
+})
 
 const byActivity = computed(() => {
   const m: Record<string, number> = {}
@@ -93,28 +227,37 @@ const byActivity = computed(() => {
   }
   return Object.entries(m).sort((a, b) => b[1] - a[1])
 })
-</script>
 
-<template>
+// 当前筛选命中的时间范围（用于时间轴副标题）
+const timeRange = computed(() => {
+  const l = filtered.value
+  if (!l.length) return ''
+  return `${l[0].time.slice(11, 16)} – ${l[l.length - 1].time.slice(11, 16)}`
+})
+</script><template>
   <div class="overview-root">
     <h1 class="page">今日概览</h1>
     <div class="row">
       <div class="glass card">
         <h3>今日帧数</h3>
-        <div class="big-num">{{ frames.length }}</div>
+        <div class="big-num">{{ filtered.length }}</div>
         <div class="muted">每 20 秒一帧 · 自动记录</div>
       </div>
       <div class="glass card" style="flex: 1">
         <h3>活动分布</h3>
         <div v-if="byActivity.length">
-          <span v-for="[k, v] in byActivity" :key="k" class="chip">{{ k }} × {{ v }}</span>
+          <span
+            v-for="[k, v] in byActivity" :key="k" class="chip"
+            :class="{ active: draftActivity === k }"
+            @click="draftActivity = draftActivity === k ? '' : k"
+          >{{ k }} × {{ v }}</span>
         </div>
         <div v-else class="muted">今天还没有记录</div>
       </div>
       <div class="glass card">
         <h3>最近</h3>
-        <div v-if="frames.length" class="muted">
-          {{ frames[frames.length - 1].time }} · {{ frames[frames.length - 1].app || '—' }}
+        <div v-if="filtered.length" class="muted">
+          {{ filtered[filtered.length - 1].time }} · {{ filtered[filtered.length - 1].app || '—' }}
         </div>
         <div v-else class="muted">—</div>
       </div>
@@ -126,11 +269,67 @@ const byActivity = computed(() => {
     </div>
 
     <div class="glass card timeline-card">
-      <h3>时间轴 · 倒序</h3>
+      <div class="tl-top">
+        <h3>时间轴 · 倒序 <span v-if="filtered.length" class="muted small">（{{ timeRange }}）</span></h3>
+        <div class="filters">
+          <!-- 关键词搜索（最前，宽 200px） -->
+          <input
+            v-model="draftKeyword"
+            placeholder="关键词搜索摘要"
+            class="f-input kw-input"
+          />
+          <!-- 应用下拉框 -->
+          <div class="ss" @click.stop="selectOpen === 'app' ? closeSelect() : openSelect('app')">
+            <button class="f-input ss-btn" :class="{ active: !!draftApp }" type="button">
+              <span class="ss-label">{{ draftApp || '应用' }}</span>
+              <span class="ss-caret">▾</span>
+            </button>
+            <div v-if="selectOpen === 'app'" class="ss-drop" @click.stop>
+              <input v-model="selectQuery" class="ss-input" placeholder="搜索应用…" @click.stop />
+              <div class="ss-list">
+                <button v-for="o in filteredAppOptions()" :key="o" class="ss-opt" :class="{ sel: o === draftApp }" @click.stop="pickApp(o)">{{ o }}</button>
+                <div v-if="!filteredAppOptions().length" class="ss-empty">无匹配</div>
+              </div>
+            </div>
+          </div>
+          <!-- 项目下拉框 -->
+          <div class="ss" @click.stop="selectOpen === 'project' ? closeSelect() : openSelect('project')">
+            <button class="f-input ss-btn" :class="{ active: !!draftProject }" type="button">
+              <span class="ss-label">{{ draftProject || '项目' }}</span>
+              <span class="ss-caret">▾</span>
+            </button>
+            <div v-if="selectOpen === 'project'" class="ss-drop" @click.stop>
+              <input v-model="selectQuery" class="ss-input" placeholder="搜索项目…" @click.stop />
+              <div class="ss-list">
+                <button v-for="o in filteredProjectOptions()" :key="o" class="ss-opt" :class="{ sel: o === draftProject }" @click.stop="pickProject(o)">{{ o }}</button>
+                <div v-if="!filteredProjectOptions().length" class="ss-empty">无匹配</div>
+              </div>
+            </div>
+          </div>
+          <!-- 活动下拉框 -->
+          <div class="ss" @click.stop="selectOpen === 'activity' ? closeSelect() : openSelect('activity')">
+            <button class="f-input ss-btn" :class="{ active: !!draftActivity }" type="button">
+              <span class="ss-label">{{ draftActivity || '活动' }}</span>
+              <span class="ss-caret">▾</span>
+            </button>
+            <div v-if="selectOpen === 'activity'" class="ss-drop" @click.stop>
+              <input v-model="selectQuery" class="ss-input" placeholder="搜索活动…" @click.stop />
+              <div class="ss-list">
+                <button v-for="o in filteredActivityOptions()" :key="o" class="ss-opt" :class="{ sel: o === draftActivity }" @click.stop="pickActivity(o)">{{ o }}</button>
+                <div v-if="!filteredActivityOptions().length" class="ss-empty">无匹配</div>
+              </div>
+            </div>
+          </div>
+          <!-- 操作按钮 -->
+          <button class="btn primary" @click="applySearch" :disabled="!hasDraft">搜索</button>
+          <button class="btn" @click="refreshOptions" :disabled="loading">更新</button>
+          <button class="btn" @click="resetFilters" :disabled="!hasDraft && !filterActivity && !filterApp && !filterProject && !filterKeyword">清除</button>
+        </div>
+      </div>
       <div v-if="loading && !frames.length" class="muted">加载中…</div>
-      <div v-else-if="!frames.length" class="muted">暂无数据（刚启动？等待前几帧）</div>
+      <div v-else-if="!filtered.length" class="muted">暂无数据{{ frames.length ? '（当前筛选无命中）' : '（刚启动？等待前几帧）' }}</div>
       <div v-else class="timeline">
-        <div v-for="(f, i) in [...frames].reverse()" :key="i" class="tl-item">
+        <div v-for="(f) in pagedFrames" :key="f.time" class="tl-item">
           <img
             v-if="f.image"
             :src="imgSrc(f.image)"
@@ -160,6 +359,12 @@ const byActivity = computed(() => {
             </div>
           </div>
         </div>
+        <!-- 分页控件：固定在时间轴右下角 -->
+      <div v-if="totalPages > 1" class="pager-fixed">
+        <button class="btn" :disabled="page <= 1" @click="page--">‹ 上一页</button>
+        <span class="muted">第 {{ page }} / {{ totalPages }} 页</span>
+        <button class="btn" :disabled="page >= totalPages" @click="page++">下一页 ›</button>
+      </div>
       </div>
     </div>
 
@@ -235,6 +440,171 @@ const byActivity = computed(() => {
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+  position: relative;
+}
+.timeline-card {
+  position: relative;
+}
+.timeline-card .timeline {
+  position: relative;
+}
+.pager-fixed {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px 4px;
+  flex-shrink: 0;
+  background: rgba(10,12,26,0.85);
+  backdrop-filter: blur(8px);
+  justify-content: flex-end;
+  border-radius: 8px;
+  z-index: 10;
+}
+
+/* 可搜索下拉框 */
+.ss { position: relative; flex: 1;}
+.ss-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  gap: 6px;
+  padding-right: 8px;
+  width: 100%;
+}
+.ss-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.ss-caret { font-size: 10px; opacity: 0.7; }
+.ss-btn.active { border-color: rgba(90,140,255,0.6); }
+.ss-drop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  width: 200px;
+  background: rgba(15,17,35,0.98);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px;
+  margin-top: 4px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.ss-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 7px 10px;
+  font-size: 12px;
+  color: #e6e9ff;
+  outline: none;
+}
+.ss-input::placeholder { color: #6a70a0; }
+.ss-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+.ss-opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: #c9cde8;
+  cursor: pointer;
+}
+.ss-opt:hover { background: rgba(255,255,255,0.08); }
+.ss-opt.sel {
+  color: #8fd6ff;
+  font-weight: 700;
+  background: rgba(90,140,255,0.15);
+}
+.ss-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #6a70a0;
+}
+
+/* 关键词搜索输入框（宽 200px） */
+.kw-input {
+  width: 200px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #e6e9ff;
+  outline: none;
+  transition: all 0.15s;
+}
+.kw-input:focus { border-color: rgba(90,140,255,0.6); }
+.kw-input::placeholder { color: #6a70a0; }
+
+/* 操作按钮组 */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1;
+}
+.btn.primary {
+  background: rgba(90,140,255,0.35);
+  border-color: rgba(90,140,255,0.7);
+  color: #eef2ff;
+  font-weight: 700;
+}
+.btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.tl-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+  display: flex;
+}
+.tl-top h3 { margin: 0; }
+.small { font-size: 12px; }
+
+/* .filters 已在上方「操作按钮组」定义，此处不再重复 */
+.f-input {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #e6e9ff;
+  outline: none;
+  transition: all 0.15s;
+  flex: 1;
+}
+.f-input:focus { border-color: rgba(90,140,255,0.6); }
+.f-input::placeholder { color: #6a70a0; }
+.chip.active {
+  background: rgba(90,140,255,0.35);
+  border-color: rgba(90,140,255,0.7);
+  color: #eef2ff;
+  cursor: pointer;
+}
+.chip { cursor: default; }
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 2px;
+  flex-shrink: 0;
 }
 .tl-item {
   display: flex;

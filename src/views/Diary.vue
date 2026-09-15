@@ -81,7 +81,7 @@ async function loadDiary() {
   }
 }
 
-// 强制刷新：按选中日期无条件重跑 LLM，覆盖已有日记并保存
+// 强制刷新：按选中日期无条件重跑 LLM，覆盖已有日记并保存（「更新」按钮手动触发）
 async function forceUpdate() {
   if (!selected.value) return
   msg.value = ''
@@ -115,7 +115,8 @@ onMounted(async () => {
   const [y, m] = selected.value.split('-').map(Number)
   year.value = y
   month.value = m - 1
-  // 不自动刷新，只加载已有的日记；点「刷新」/「更新」才重新生成
+  // 进入页面：只读磁盘已有日记，不触发 LLM（符合「进入不自动刷新」）
+  // 自动刷新发生在用户点击查看某一天时（pickDate → loadDiarySmart）
   await loadDiaryOnly()
 })
 
@@ -126,10 +127,33 @@ function pickDate(day: string, inMonth: boolean) {
     month.value = m - 1
   }
   selected.value = day
-  loadDiaryOnly()
+  // 点击查看某天：智能刷新——若该天有新生成的 10 分钟数据（auto-trigger 已写盘），
+  // 自动重新生成日记并显示；否则快速返回已有日记（不耗 LLM）。无需手动点「刷新」。
+  loadDiarySmart()
 }
 
-// 仅读取磁盘上已有的日记，不触发 regenerate
+// 智能加载：若当天 10 分钟数据比已有日记多，自动重新生成；否则直接读旧日记（不耗 LLM）
+async function loadDiarySmart() {
+  if (!selected.value) return
+  msg.value = ''
+  diary.value = null
+  busy.value = true
+  try {
+    const d = await invoke<Diary>('smart_regenerate_day', { day: selected.value })
+    diary.value = d
+    if (!d.source?.length) {
+      msg.value = '该天暂无 10 分钟汇总数据，无法生成日记。'
+    } else if (d.status === 'pending') {
+      msg.value = '该天日记生成失败或尚未完成。'
+    }
+  } catch (e: any) {
+    msg.value = String(e)
+  } finally {
+    busy.value = false
+    dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
+  }
+}
+
 async function loadDiaryOnly() {
   if (!selected.value) return
   msg.value = ''
