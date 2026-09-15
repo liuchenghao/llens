@@ -462,6 +462,21 @@ const timeRange = computed(() => {
   border-radius: 8px;
   z-index: 10;
 }
+/* 分页按钮：与 .f-input 输入框同高度 */
+.pager-fixed .btn {
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  height: auto;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #e6e9ff;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.pager-fixed .btn:hover:not(:disabled) { background: rgba(255,255,255,0.15); }
+.pager-fixed .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* 可搜索下拉框 */
 .ss { position: relative; flex: 1;}
@@ -564,6 +579,28 @@ const timeRange = computed(() => {
   font-weight: 700;
 }
 .btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 筛选区按钮：高度与 .f-input 输入框一致（不再用全局 .btn 的大 padding） */
+.filters .btn {
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  height: auto;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #e6e9ff;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.filters .btn:hover:not(:disabled) { background: rgba(255,255,255,0.15); }
+.filters .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.filters .btn.primary {
+  background: rgba(90,140,255,0.35);
+  border-color: rgba(90,140,255,0.7);
+  color: #eef2ff;
+  font-weight: 700;
+}
 
 .tl-top {
   display: flex;

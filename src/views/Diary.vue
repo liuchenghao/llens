@@ -103,15 +103,11 @@ async function forceUpdate() {
 }
 
 onMounted(async () => {
-  // pick the most recent date that has a diary, or today if none
   dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
-  if (dates.value.length) {
-    const sorted = [...dates.value].sort().reverse()
-    selected.value = sorted[0]
-  } else {
-    selected.value = today()
-  }
-  // also shift the calendar to the month of the selected day
+  // 默认进入「今天」；而非磁盘上最新一篇日记的日期
+  // （今天通常还没有生成日记，此时右侧显示“暂无日记”并可点刷新生成）
+  selected.value = today()
+  // 日历切到今天所在月份
   const [y, m] = selected.value.split('-').map(Number)
   year.value = y
   month.value = m - 1
@@ -127,9 +123,8 @@ function pickDate(day: string, inMonth: boolean) {
     month.value = m - 1
   }
   selected.value = day
-  // 点击查看某天：智能刷新——若该天有新生成的 10 分钟数据（auto-trigger 已写盘），
-  // 自动重新生成日记并显示；否则快速返回已有日记（不耗 LLM）。无需手动点「刷新」。
-  loadDiarySmart()
+  // 点击日期只切换查看，不触发 LLM 生成；读磁盘已有日记
+  loadDiaryOnly()
 }
 
 // 智能加载：若当天 10 分钟数据比已有日记多，自动重新生成；否则直接读旧日记（不耗 LLM）
@@ -182,10 +177,10 @@ function shiftMonth(delta: number) {
 </script>
 
 <template>
-  <div>
+  <div class="diary-root">
     <h1 class="page">日记</h1>
     <div class="row">
-      <div class="glass card" style="flex: 1.1">
+      <div class="glass card diary-cal">
         <div class="cal-head">
           <button class="btn" @click="shiftMonth(-1)">‹</button>
           <div class="cal-title">{{ year }} 年 {{ month + 1 }} 月</div>
@@ -212,7 +207,7 @@ function shiftMonth(delta: number) {
         </div>
       </div>
 
-      <div class="glass card" style="flex: 1.4">
+      <div class="glass card diary-body">
         <div class="diary-head">
           <h3>{{ selected || '…' }} 的日记</h3>
           <span v-if="busy" class="muted">生成中…</span>
@@ -220,26 +215,29 @@ function shiftMonth(delta: number) {
         </div>
 
         <template v-if="diary && diary.status === 'done'">
-          <div class="d-sec"><b>简短总结</b><p>{{ diary.brief || '—' }}</p></div>
-          <div class="d-sec"><b>主要事项</b>
-            <ol><li v-for="(t, i) in diary.top3" :key="i">{{ t }}</li></ol>
+          <div class="diary-content">
+            <div class="d-sec"><b>简短总结</b><p>{{ diary.brief || '—' }}</p></div>
+            <div class="d-sec"><b>主要事项</b>
+              <ol><li v-for="(t, i) in diary.top3" :key="i">{{ t }}</li></ol>
+            </div>
+            <div class="d-sec"><b>高光</b>
+              <ul><li v-for="(h, i) in diary.highlights" :key="i">✦ {{ h }}</li></ul>
+            </div>
+            <div class="d-sec"><b>待办</b>
+              <ul class="todos">
+                <li v-for="(t, i) in diary.todos" :key="i">
+                  <input type="checkbox" :checked="t.done" /> {{ t.text }}
+                </li>
+              </ul>
+            </div>
+            <div class="d-sec"><b>优化建议</b>
+              <ul><li v-for="(a, i) in diary.advice" :key="i">{{ a }}</li></ul>
+            </div>
           </div>
-          <div class="d-sec"><b>高光</b>
-            <ul><li v-for="(h, i) in diary.highlights" :key="i">✦ {{ h }}</li></ul>
-          </div>
-          <div class="d-sec"><b>待办</b>
-            <ul class="todos">
-              <li v-for="(t, i) in diary.todos" :key="i">
-                <input type="checkbox" :checked="t.done" /> {{ t.text }}
-              </li>
-            </ul>
-          </div>
-          <div class="d-sec"><b>优化建议</b>
-            <ul><li v-for="(a, i) in diary.advice" :key="i">{{ a }}</li></ul>
-          </div>
-          <div class="d-sec"><b>温馨提示</b><p class="tip">{{ diary.tip || '—' }}</p></div>
-          <div class="muted" style="margin-top: 8px; font-size: 11px">
-            数据源：{{ diary.source.length }} 个 10 分钟片段
+          <!-- 温馨提示 + 数据源：固定在卡片最底部，不随内容区滚动 -->
+          <div class="diary-foot">
+            <div class="d-sec foot-sec"><b>温馨提示</b><p class="tip">{{ diary.tip || '—' }}</p></div>
+            <div class="muted foot-src">数据源：{{ diary.source.length }} 个 10 分钟片段</div>
           </div>
         </template>
         <div v-else-if="diary" class="muted">日记尚未生成，点击「刷新」或「更新」重试。</div>
@@ -250,6 +248,89 @@ function shiftMonth(delta: number) {
 </template>
 
 <style scoped>
+/* ── 高度自适应：根容器填满 .content 剩余高度，行内卡片随窗口伸缩 ── */
+.diary-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.diary-root .row {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+  overflow: hidden;
+  flex-wrap: nowrap;   /* 覆盖全局 .row 的 flex-wrap: wrap，保证两卡横向并排 */
+}
+/* 日历卡片：内容区可内部滚动（窗口很矮时） */
+.diary-cal {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  flex: 0 0 42%;   /* 固定占 42%，不随内容伸缩，保证与右侧并排 */
+  min-width: 0;
+}
+.diary-cal .cal {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.diary-cal .cal::-webkit-scrollbar { width: 4px; }
+.diary-cal .cal::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border-radius: 4px;
+}
+/* 日记正文卡片：填满窗口剩余高度，内容区内部滚动 */
+.diary-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 0%;   /* 占剩余全部宽度 */
+  min-width: 0;
+}
+/* 标题栏固定不滚动 */
+.diary-head {
+  flex-shrink: 0;
+}
+/* 简短总结以下的内容区：占满剩余高度，超出后内部滚动 */
+.diary-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+}
+.diary-content::-webkit-scrollbar { width: 6px; }
+.diary-content::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.16);
+  border-radius: 4px;
+}
+/* 温馨提示 + 数据源：固定在卡片最底部，不随内容区滚动 */
+.diary-foot {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 10px;
+  margin-top: 8px;
+}
+.diary-foot .foot-sec {
+  margin: 0;
+}
+.diary-foot .foot-src {
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+/* 窗口很矮时，允许整页 .content 兜底滚动（.row overflow 恢复可见） */
+@media (max-height: 520px) {
+  .diary-root .row {
+    overflow: visible;
+    flex: none;
+  }
+}
+
 .cal-head {
   display: flex;
   align-items: center;
@@ -330,6 +411,7 @@ function shiftMonth(delta: number) {
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
+  flex-shrink: 0;
 }
 .diary-head h3 {
   margin: 0;
