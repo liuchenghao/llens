@@ -81,7 +81,7 @@ async function loadDiary() {
   }
 }
 
-// 强制刷新：按选中日期无条件重跑 LLM，覆盖已有日记
+// 强制刷新：按选中日期无条件重跑 LLM，覆盖已有日记并保存
 async function forceUpdate() {
   if (!selected.value) return
   msg.value = ''
@@ -91,6 +91,8 @@ async function forceUpdate() {
     diary.value = d
     if (!d || !d.source?.length) {
       msg.value = '该天暂无 10 分钟数据，无法生成日记。'
+    } else {
+      msg.value = '已强制更新并保存。'
     }
   } catch (e: any) {
     msg.value = String(e)
@@ -113,7 +115,8 @@ onMounted(async () => {
   const [y, m] = selected.value.split('-').map(Number)
   year.value = y
   month.value = m - 1
-  await loadDiary()
+  // 不自动刷新，只加载已有的日记；点「刷新」/「更新」才重新生成
+  await loadDiaryOnly()
 })
 
 function pickDate(day: string, inMonth: boolean) {
@@ -123,7 +126,25 @@ function pickDate(day: string, inMonth: boolean) {
     month.value = m - 1
   }
   selected.value = day
-  loadDiary()
+  loadDiaryOnly()
+}
+
+// 仅读取磁盘上已有的日记，不触发 regenerate
+async function loadDiaryOnly() {
+  if (!selected.value) return
+  msg.value = ''
+  diary.value = null
+  try {
+    const d = await invoke<Diary | null>('get_diary', { day: selected.value })
+    diary.value = d
+    if (!d) {
+      msg.value = '该天暂无日记。点「刷新」生成或「更新」强制重写。'
+    }
+  } catch (e: any) {
+    msg.value = String(e)
+  } finally {
+    dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
+  }
 }
 
 function shiftMonth(delta: number) {
