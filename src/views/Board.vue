@@ -54,6 +54,8 @@ const range = computed((): { startDay: string; endDay: string } => {
 
 const frames = ref<Frame[]>([])
 const t10 = ref<T10[]>([])
+// 「逐日帧量趋势」独立数据源：固定最近 14 天，不受顶部粒度切换影响
+const trendFrames = ref<Frame[]>([])
 const errMsg = ref('')
 
 async function load() {
@@ -62,6 +64,18 @@ async function load() {
     const data = await invoke<{ frames: Frame[]; t10: T10[] }>('list_range', range.value)
     frames.value = data.frames
     t10.value = data.t10
+    // 趋势图固定拉取最近 14 天的帧数据（只取帧，用于按天分组）
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const fdate = (d: Date) =>
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    const start = new Date(now)
+    start.setDate(start.getDate() - 13)
+    const trendData = await invoke<{ frames: Frame[] }>('list_range', {
+      startDay: fdate(start),
+      endDay: fdate(new Date(now.getTime() + 86400000)),
+    })
+    trendFrames.value = trendData.frames
     await nextTick()
     renderAll()
   } catch (e: any) {
@@ -116,7 +130,7 @@ const heatmap = computed(() => {
 
 const dailyTrend = computed(() => {
   const byDay: Record<string, number> = {}
-  for (const f of frames.value) {
+  for (const f of trendFrames.value) {
     const d = f.time.slice(0, 10)
     byDay[d] = (byDay[d] || 0) + 1
   }
