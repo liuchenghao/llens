@@ -2,10 +2,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
+type Task = {
+  text: string
+  minutes: number
+}
+
 type Diary = {
   date: string
   brief: string
-  top3: string[]
+  top3: Task[]
   highlights: string[]
   todos: { text: string; done: boolean }[]
   advice: string[]
@@ -112,7 +117,6 @@ onMounted(async () => {
   year.value = y
   month.value = m - 1
   // 进入页面：只读磁盘已有日记，不触发 LLM（符合「进入不自动刷新」）
-  // 自动刷新发生在用户点击查看某一天时（pickDate → loadDiarySmart）
   await loadDiaryOnly()
 })
 
@@ -125,28 +129,6 @@ function pickDate(day: string, inMonth: boolean) {
   selected.value = day
   // 点击日期只切换查看，不触发 LLM 生成；读磁盘已有日记
   loadDiaryOnly()
-}
-
-// 智能加载：若当天 10 分钟数据比已有日记多，自动重新生成；否则直接读旧日记（不耗 LLM）
-async function loadDiarySmart() {
-  if (!selected.value) return
-  msg.value = ''
-  diary.value = null
-  busy.value = true
-  try {
-    const d = await invoke<Diary>('smart_regenerate_day', { day: selected.value })
-    diary.value = d
-    if (!d.source?.length) {
-      msg.value = '该天暂无 10 分钟汇总数据，无法生成日记。'
-    } else if (d.status === 'pending') {
-      msg.value = '该天日记生成失败或尚未完成。'
-    }
-  } catch (e: any) {
-    msg.value = String(e)
-  } finally {
-    busy.value = false
-    dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
-  }
 }
 
 async function loadDiaryOnly() {
@@ -218,7 +200,12 @@ function shiftMonth(delta: number) {
           <div class="diary-content">
             <div class="d-sec"><b>简短总结</b><p>{{ diary.brief || '—' }}</p></div>
             <div class="d-sec"><b>主要事项</b>
-              <ol><li v-for="(t, i) in diary.top3" :key="i">{{ t }}</li></ol>
+              <ol class="top3-list">
+                <li v-for="(t, i) in diary.top3" :key="i">
+                  {{ t.text }}
+                  <span v-if="t.minutes > 0" class="task-dur">约 {{ t.minutes }} 分钟</span>
+                </li>
+              </ol>
             </div>
             <div class="d-sec"><b>高光</b>
               <ul><li v-for="(h, i) in diary.highlights" :key="i">✦ {{ h }}</li></ul>
@@ -436,6 +423,37 @@ function shiftMonth(delta: number) {
 .d-sec ol {
   margin: 0;
   padding-left: 20px;
+}
+/* 日报条目序号：有多少写多少（连续数字编号） */
+.top3-list {
+  counter-reset: top3;
+  padding-left: 20px;
+}
+.top3-list li {
+  counter-increment: top3;
+  list-style: none;
+  position: relative;
+  padding-left: 24px;
+  margin: 6px 0;
+}
+.top3-list li::before {
+  content: counter(top3) ".";
+  position: absolute;
+  left: 0;
+  color: #aeb4dc;
+  font-weight: 600;
+}
+/* 任务累计时长标识 */
+.task-dur {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  color: #8fd6ff;
+  background: rgba(143,214,255,0.12);
+  border: 1px solid rgba(143,214,255,0.25);
+  border-radius: 8px;
+  padding: 1px 6px;
+  vertical-align: middle;
 }
 .tip {
   color: #9be8c8;

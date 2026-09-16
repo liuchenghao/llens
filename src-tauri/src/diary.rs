@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct Diary {
     pub date: String,
     pub brief: String,
-    pub top3: Vec<String>,
+    pub top3: Vec<Task>,
     pub highlights: Vec<String>,
     pub todos: Vec<Todo>,
     pub advice: Vec<String>,
@@ -23,6 +23,16 @@ pub struct Todo {
     pub text: String,
     #[serde(default)]
     pub done: bool,
+}
+
+/// 日报条目：工作任务描述 + 累计时长（分钟）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Task {
+    pub text: String,
+    /// 累计时长（分钟），0 表示未统计
+    #[serde(default)]
+    pub minutes: u32,
 }
 
 impl Diary {
@@ -153,13 +163,30 @@ pub async fn regenerate_day(
 请基于这些记录生成当天的日记，严格按如下 JSON 输出（不要输出 JSON 以外的任何文字）：
 {{
   "brief": "简短总结（不超过 80 字）",
-  "top3": ["主要事项一","主要事项二","主要事项三"],
+  "top3": [
+    {{"text": "日报条目一描述（约 50 字）", "minutes": 45}},
+    {{"text": "日报条目二描述（约 50 字）", "minutes": 30}},
+    "…按实际 30 分钟以上任务数量，每条含 text 和 minutes 字段"
+  ],
   "highlights": ["高光时刻一","高光时刻二"],
   "todos": ["待办一","待办二"],
   "advice": ["优化建议一","优化建议二"],
   "tip": "一句温馨提示"
 }}
-所有字段都用中文。top3 必须恰好 3 条；highlights/todos/advice 各 1-3 条；如果当天数据很少，也要尽量填写。"#,
+
+【top3 日报条目规则】
+top3 字段为对象数组，每项格式为 {{"text": "描述", "minutes": 整数分钟数}}，要求：
+- **只统计持续 30 分钟以上的工作任务**：将相邻切片的相同/相似工作内容合并，只有累计覆盖 30 分钟及以上的任务才计入；不足 30 分钟的零散操作忽略不写
+- **每条标注累计时长**（minutes 字段，单位：分钟），根据切片记录估算该任务的实际持续时间（如 45、60、90）
+- 条数：按实际统计出的任务数量写（若当天确实不足 20 个 30 分钟任务，就写实际数量，不要凑数）
+- 每条 text 约 50 个中文字符，纯文本业务语言描述（不用变量名、文件路径、类名、方法名）
+- 聚焦：做了什么、为什么、带来什么影响
+- 语气：简洁、专业、工作总结口吻
+- 归纳合并：将相邻切片中相同或高度相似的条目合并为一条，避免重复
+- 示例（好）：{{"text":"修复未登录状态下短视频页打开报异常问题","minutes":50}} {{"text":"调整用户收藏接口，请求失败时返回空列表不再抛出错误","minutes":35}}
+- 示例（坏，禁止）：{{"text":"将 Scroll 组件替换为 List，添加 SmartRefreshController","minutes":30}}（包含代码标识符）
+
+其他字段：highlights/todos/advice 各 1-3 条；如果当天数据很少，也要尽量填写。所有字段都用中文。"#,
         day = day,
         corpus = corpus
     );
@@ -198,7 +225,25 @@ pub async fn regenerate_day(
 
     let mut diary = Diary::new_pending(day);
     diary.brief = parsed["brief"].as_str().unwrap_or_default().trim().to_string();
-    diary.top3 = str_arr("top3");
+    // 解析 top3：兼容对象数组 [{text,minutes}] 和旧版字符串数组 ["..."]
+    diary.top3 = parsed["top3"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    if let Some(obj) = x.as_object() {
+                        let text = obj["text"].as_str()?.trim().to_string();
+                        let minutes = obj["minutes"].as_u64().unwrap_or(0) as u32;
+                        if text.is_empty() { None } else { Some(Task { text, minutes }) }
+                    } else {
+                        x.as_str().map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .map(|text| Task { text, minutes: 0 })
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     diary.highlights = str_arr("highlights");
     diary.todos = str_arr("todos")
         .into_iter()

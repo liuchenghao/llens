@@ -120,7 +120,11 @@ fn diary_hit(d: &Diary, kw: &str) -> Option<Hit> {
     let hay = format!(
         "{} {} {} {} {}",
         d.brief,
-        d.top3.join(" "),
+        d.top3
+            .iter()
+            .map(|t| t.text.clone())
+            .collect::<Vec<_>>()
+            .join(" "),
         d.highlights.join(" "),
         d.todos
             .iter()

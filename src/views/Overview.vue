@@ -63,7 +63,7 @@ const PAGE_SIZE = 20
 const page = ref(1)
 const totalPages = ref(1)
 
-// 筛选后的全量结果（用于分页 + 统计）
+// 筛选后的全量结果（用于分页 + 统计），按时间倒序（最新在前）
 const filtered = computed(() => {
   let list = frames.value
   if (filterActivity.value) list = list.filter(f => f.activity === filterActivity.value)
@@ -77,14 +77,16 @@ const filtered = computed(() => {
       (f.project || '').toLowerCase().includes(kw)
     )
   }
-  return list
+  // 全量按时间倒序：最新帧在前，跨页顺序一致
+  return [...list].sort((a, b) => b.time.localeCompare(a.time))
 })
 const pagedFrames = computed(() => {
   const total = filtered.value.length
   totalPages.value = Math.max(1, Math.ceil(total / PAGE_SIZE))
   if (page.value > totalPages.value) page.value = totalPages.value
   const start = (page.value - 1) * PAGE_SIZE
-  return filtered.value.slice(start, start + PAGE_SIZE).reverse()
+  // filtered 已倒序，直接切片即可，页内保持最新在前
+  return filtered.value.slice(start, start + PAGE_SIZE)
 })
 
 // 可筛选的候选值（从全量帧中提取，去重）
@@ -257,7 +259,7 @@ const timeRange = computed(() => {
       <div class="glass card">
         <h3>最近</h3>
         <div v-if="filtered.length" class="muted">
-          {{ filtered[filtered.length - 1].time }} · {{ filtered[filtered.length - 1].app || '—' }}
+          {{ filtered[0].time }} · {{ filtered[0].app || '—' }}
         </div>
         <div v-else class="muted">—</div>
       </div>
