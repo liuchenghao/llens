@@ -8,10 +8,22 @@ use super::store::Config;
 pub struct Frame {
     /// ISO-8601 local time of the frame
     pub time: String,
-    /// relative path under data_root (screenshots/YYYY-MM/HHMMSS.png) — main display
+    /// relative path under data_root (screenshots/YYYY-MM/HHMMSS.png) — legacy full-size
     pub image: String,
     /// extra display screenshots, same layout as `image` (screenshots/YYYY-MM/HHMMSS_d2.png …)
     pub extra_images: Vec<String>,
+    /// timeline thumbnail (<100KB, JPEG ≤400px wide); may be empty for legacy frames
+    #[serde(default)]
+    pub thumb: String,
+    /// large preview image (JPEG <1MB, ≤2048px wide); may be empty for legacy frames
+    #[serde(default)]
+    pub preview: String,
+    /// extra display thumbnails, parallel to `extra_images`
+    #[serde(default)]
+    pub extra_thumbs: Vec<String>,
+    /// extra display preview images, parallel to `extra_images`
+    #[serde(default)]
+    pub extra_previews: Vec<String>,
     /// exactly 5 short sentences from the model (empty if pending/failed)
     pub summary5: Vec<String>,
     /// 工作 | 学习 | 娱乐 | 社交 | 其他
@@ -115,15 +127,32 @@ async fn llm_summarize(cfg: &Config, data_urls: &[String], n_displays: usize, ti
 /// Re-summarize an existing frame (screenshot already on disk). Used by the
 /// retry button in the timeline. Returns the updated frame.
 pub async fn retry_frame(cfg: &Config, data_root: &PathBuf, frame: &Frame) -> Result<Frame, String> {
+    // 原图（image / extra_images）在 LLM 解释完成后已被删除；重试时
+    // fallback 到压缩预览图（preview / extra_previews，≤2048px JPEG），质量足够 LLM 理解。
     let shot = data_root.join(&frame.image);
-    if !shot.exists() {
-        return Err(format!("screenshot not found: {}", frame.image));
-    }
-    let mut paths: Vec<std::path::PathBuf> = vec![shot];
-    for extra in &frame.extra_images {
+    let main_src: std::path::PathBuf = if shot.exists() {
+        shot
+    } else if !frame.preview.is_empty() {
+        data_root.join(&frame.preview)
+    } else {
+        return Err(format!(
+            "screenshot not found: {} (and no preview image)",
+            frame.image
+        ));
+    };
+    let mut paths: Vec<std::path::PathBuf> = vec![main_src];
+    for (i, extra) in frame.extra_images.iter().enumerate() {
         let p = data_root.join(extra);
         if p.exists() {
             paths.push(p);
+        } else {
+            // 原图已删 → 用对应的压缩预览图
+            if let Some(ep) = frame.extra_previews.get(i) {
+                let pp = data_root.join(ep);
+                if pp.exists() {
+                    paths.push(pp);
+                }
+            }
         }
     }
     let time_str = frame.time.clone();
@@ -285,15 +314,59 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         .map(|fn2| format!("screenshots/{}/{}", now.format("%Y-%m"), fn2))
         .collect();
 
+    // 5) Generate timeline thumbnails (<100KB) + large previews (<1MB) for each display,
+    //    then delete the original full-size PNGs (the LLM already consumed its copy).
+    let month = now.format("%Y-%m").to_string();
+    let thumb_rel = format!("screenshots/{}/{}_t.jpg", month, base_stem);
+    let preview_rel = format!("screenshots/{}/{}_p.jpg", month, base_stem);
+    let mut extra_thumb_rels: Vec<String> = Vec::new();
+    let mut extra_preview_rels: Vec<String> = Vec::new();
+    let mut originals_to_delete: Vec<std::path::PathBuf> = Vec::new();
+
+    if make_thumbnail(&main_path, &shot_dir.join(format!("{base_stem}_t.jpg"))).is_ok()
+        && make_preview(&main_path, &shot_dir.join(format!("{base_stem}_p.jpg"))).is_ok()
+    {
+        originals_to_delete.push(main_path.clone());
+    }
+    for ep in extra_paths.iter() {
+        // 与主屏一致：直接用完整 PathBuf 拼出 {stem}_t.jpg / {stem}_p.jpg，
+        // 避免 with_extension("_t.jpg") 产生 {stem}._t.jpg（多一个点）导致相对路径对不上。
+        let stem_extra = ep
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+            .trim_end_matches(".png")
+            .to_string();
+        let t_path = shot_dir.join(format!("{stem_extra}_t.jpg"));
+        let p_path = shot_dir.join(format!("{stem_extra}_p.jpg"));
+        if make_thumbnail(ep, &t_path).is_ok() && make_preview(ep, &p_path).is_ok() {
+            extra_thumb_rels.push(format!("screenshots/{month}/{stem_extra}_t.jpg"));
+            extra_preview_rels.push(format!("screenshots/{month}/{stem_extra}_p.jpg"));
+            originals_to_delete.push(ep.clone());
+        }
+    }
+
+    let main_ok = !originals_to_delete.is_empty()
+        && originals_to_delete.iter().any(|p| p == &main_path);
+
     let frame = Frame {
         time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
         image: main_rel,
         extra_images: extra_rels,
+        thumb: if main_ok { thumb_rel } else { String::new() },
+        preview: if main_ok { preview_rel } else { String::new() },
+        extra_thumbs: extra_thumb_rels,
+        extra_previews: extra_preview_rels,
         summary5,
         activity,
         app,
         project,
     };
+
+    // 6) Remove the original full-size PNGs (compressed copies already written).
+    for p in &originals_to_delete {
+        let _ = std::fs::remove_file(p);
+    }
 
     // 3) append to current-hour JSON atomically
     append_hour_frame(data_root, &now, &frame);
@@ -366,6 +439,49 @@ async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
         &jpeg,
     );
     Ok((jpeg, format!("data:image/jpeg;base64,{b64}")))
+}
+
+/// Create a thumbnail JPEG (≤400px wide, q=72) from a source image on disk.
+/// Target: <100KB (Retina 3x at 400px q72 is typically 15-40KB).
+/// Writes to `out_path`; returns Ok on success.
+fn make_thumbnail(src: &std::path::Path, out_path: &std::path::Path) -> Result<(), String> {
+    let sips = std::process::Command::new("sips")
+        .args(["-Z", "400", "-s", "format", "jpeg", "-s", "formatOptions", "72"])
+        .arg(src)
+        .arg("--out")
+        .arg(out_path)
+        .output()
+        .map_err(|e| format!("sips thumb spawn: {e}"))?;
+    if !sips.status.success() {
+        let stderr = String::from_utf8_lossy(&sips.stderr);
+        return Err(format!("sips thumb failed: {stderr}"));
+    }
+    Ok(())
+}
+
+/// Create a large preview JPEG (≤2048px wide) from a source image on disk,
+/// targeting <1MB. Tries quality 85 → 75 → 60 → 45 until under 1MB.
+fn make_preview(src: &std::path::Path, out_path: &std::path::Path) -> Result<(), String> {
+    const TARGET: u64 = 1_000_000; // 1MB
+    for q in ["85", "75", "60", "45"] {
+        let sips = std::process::Command::new("sips")
+            .args(["-Z", "2048", "-s", "format", "jpeg", "-s", "formatOptions", q])
+            .arg(src)
+            .arg("--out")
+            .arg(out_path)
+            .output()
+            .map_err(|e| format!("sips preview spawn: {e}"))?;
+        if !sips.status.success() {
+            let stderr = String::from_utf8_lossy(&sips.stderr);
+            return Err(format!("sips preview failed: {stderr}"));
+        }
+        if out_path.metadata().map(|m| m.len() < TARGET).unwrap_or(false) {
+            return Ok(());
+        }
+        // too big, try lower quality
+    }
+    // 45 still over 1MB (rare, e.g. very complex screen) — accept it anyway
+    Ok(())
 }
 
 fn read_hour_file(p: &PathBuf, hour_key: &str) -> HourFile {
