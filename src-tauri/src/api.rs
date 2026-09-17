@@ -185,11 +185,14 @@ pub fn get_diary(day: String) -> Result<Option<Diary>, String> {
 
 /// Force-regenerate a specific day's diary (always re-runs the LLM),
 /// ignoring whether it was already done. This is what the diary UI
-/// "update" button uses.
+/// "update" button uses. `min_task_minutes` 控制 top3 统计的任务时长阈值。
 #[tauri::command]
-pub async fn force_regenerate_day(day: String) -> Result<Diary, String> {
+pub async fn force_regenerate_day(
+    day: String,
+    min_task_minutes: Option<u32>,
+) -> Result<Diary, String> {
     let d = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|e| e.to_string())?;
-    crate::diary::regenerate_day(&root(), &cfg(), d, true).await
+    crate::diary::regenerate_day(&root(), &cfg(), d, true, min_task_minutes.unwrap_or(30)).await
 }
 
 /// Smart-regenerate a single day: if the day's 10-min data has grown since
@@ -198,9 +201,12 @@ pub async fn force_regenerate_day(day: String) -> Result<Diary, String> {
 /// UI calls on date-click so a freshly-arrived 10-min slice auto-refreshes
 /// the day without the user having to click "refresh".
 #[tauri::command]
-pub async fn smart_regenerate_day(day: String) -> Result<Diary, String> {
+pub async fn smart_regenerate_day(
+    day: String,
+    min_task_minutes: Option<u32>,
+) -> Result<Diary, String> {
     let d = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|e| e.to_string())?;
-    crate::diary::regenerate_day(&root(), &cfg(), d, false).await
+    crate::diary::regenerate_day(&root(), &cfg(), d, false, min_task_minutes.unwrap_or(30)).await
 }
 
 /// All diary dates that exist on disk, filtered to the configured lookback window.
@@ -238,8 +244,17 @@ pub fn list_diary_dates() -> Vec<String> {
 
 /// Regenerate pending diaries (background-safe; returns how many completed).
 #[tauri::command]
-pub async fn regenerate_diaries(limit: Option<usize>) -> Result<Vec<Diary>, String> {
-    let out = crate::diary::regenerate_pending(&root(), &cfg(), limit.unwrap_or(5)).await;
+pub async fn regenerate_diaries(
+    limit: Option<usize>,
+    min_task_minutes: Option<u32>,
+) -> Result<Vec<Diary>, String> {
+    let out = crate::diary::regenerate_pending(
+        &root(),
+        &cfg(),
+        limit.unwrap_or(5),
+        min_task_minutes.unwrap_or(30),
+    )
+    .await;
     Ok(out)
 }
 

@@ -316,7 +316,7 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
             let cfg_clone = cfg.clone();
             let root_clone = data_root.clone();
             tokio::spawn(async move {
-                let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3).await;
+                let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3, 30).await;
             });
         }
         return Ok(rest_frame);
@@ -487,7 +487,7 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         let cfg_clone = cfg.clone();
         let root_clone = data_root.clone();
         tokio::spawn(async move {
-            let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3).await;
+            let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3, 30).await;
         });
     }
 

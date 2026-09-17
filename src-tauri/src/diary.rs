@@ -108,12 +108,15 @@ pub fn pending_days(root: &PathBuf, up_to: NaiveDate, lookback_days: u32) -> Vec
 }
 
 /// Generate (or regenerate) the diary for a single day.
+/// `min_task_minutes`: 主要事项统计阈值（分钟），0 表示不限制；
+/// 只把累计时长 ≥ 该值的任务计入 top3，默认 30。
 pub async fn generate_day(
     root: &PathBuf,
     cfg: &super::store::Config,
     day: NaiveDate,
+    min_task_minutes: u32,
 ) -> Result<Diary, String> {
-    regenerate_day(root, cfg, day, false).await
+    regenerate_day(root, cfg, day, false, min_task_minutes).await
 }
 
 /// Regenerate the diary for a single day. If `force` is true, ignore
@@ -123,6 +126,7 @@ pub async fn regenerate_day(
     cfg: &super::store::Config,
     day: NaiveDate,
     force: bool,
+    min_task_minutes: u32,
 ) -> Result<Diary, String> {
     let slices =
         super::store::list_t10_range(root, day, day + chrono::Duration::days(1));
@@ -155,6 +159,13 @@ pub async fn regenerate_day(
         let _ = s;
     }
     let corpus = corpus.join("\n");
+    // 任务时长阈值：0 表示不限制（全部计入），否则只统计 ≥ 该分钟数的工作任务
+    let threshold = if min_task_minutes > 0 { min_task_minutes } else { 0 };
+    let threshold_desc = if threshold > 0 {
+        format!("只统计累计时长 ≥ {threshold} 分钟的工作任务，不足 {threshold} 分钟的零散操作忽略不写")
+    } else {
+        "不按时长过滤，所有工作任务均计入".to_string()
+    };
 
     let prompt = format!(
         r#"你是用户的屏幕活动记录分析助手。下面是 {day} 一天内按 10 分钟切片的汇总记录：
@@ -166,7 +177,7 @@ pub async fn regenerate_day(
   "top3": [
     {{"text": "日报条目一描述（约 50 字）", "minutes": 45}},
     {{"text": "日报条目二描述（约 50 字）", "minutes": 30}},
-    "…按实际 30 分钟以上任务数量，每条含 text 和 minutes 字段"
+    "…按实际符合条件的工作任务数量，每条含 text 和 minutes 字段"
   ],
   "highlights": ["高光时刻一","高光时刻二"],
   "todos": ["待办一","待办二"],
@@ -176,9 +187,9 @@ pub async fn regenerate_day(
 
 【top3 日报条目规则】
 top3 字段为对象数组，每项格式为 {{"text": "描述", "minutes": 整数分钟数}}，要求：
-- **只统计持续 30 分钟以上的工作任务**：将相邻切片的相同/相似工作内容合并，只有累计覆盖 30 分钟及以上的任务才计入；不足 30 分钟的零散操作忽略不写
-- **每条标注累计时长**（minutes 字段，单位：分钟），根据切片记录估算该任务的实际持续时间（如 45、60、90）
-- 条数：按实际统计出的任务数量写（若当天确实不足 20 个 30 分钟任务，就写实际数量，不要凑数）
+- **{threshold_desc}**
+- **每条标注累计时长**（minutes 字段，单位：分钟），根据切片记录估算该任务的实际持续时间
+- 条数：按实际统计出的任务数量写（不要凑数）
 - 每条 text 约 50 个中文字符，纯文本业务语言描述（不用变量名、文件路径、类名、方法名）
 - 聚焦：做了什么、为什么、带来什么影响
 - 语气：简洁、专业、工作总结口吻
@@ -189,7 +200,8 @@ top3 字段为对象数组，每项格式为 {{"text": "描述", "minutes": 整�
 
 其他字段：highlights/todos/advice 各 1-3 条；如果当天数据很少，也要尽量填写。所有字段都用中文。"#,
         day = day,
-        corpus = corpus
+        corpus = corpus,
+        threshold_desc = threshold_desc
     );
 
     let client = reqwest::Client::new();
@@ -263,11 +275,12 @@ pub async fn regenerate_pending(
     root: &PathBuf,
     cfg: &super::store::Config,
     limit: usize,
+    min_task_minutes: u32,
 ) -> Vec<Diary> {
     let days = pending_days(root, Local::now().date_naive(), cfg.diary_lookback_days);
     let mut out = Vec::new();
     for d in days.into_iter().rev().take(limit) {
-        match generate_day(root, cfg, d).await {
+        match generate_day(root, cfg, d, min_task_minutes).await {
             Ok(d) => out.push(d),
             Err(e) => eprintln!("diary {d} failed: {e}"),
         }

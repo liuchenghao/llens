@@ -19,6 +19,12 @@ type Diary = {
   source: string[]
 }
 
+// 主要事项统计阈值（分钟）：只显示累计时长 ≥ 该值的任务
+const minMinutes = ref<number>(30)
+const filteredTop3 = computed(() =>
+  (diary.value?.top3 || []).filter((t) => t.minutes >= minMinutes.value)
+)
+
 const today = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -72,7 +78,10 @@ async function loadDiary() {
   busy.value = true
   try {
     // 按选中日期做增量更新：只补生成过期或缺失的日记，已最新的是 no-op
-    await invoke('regenerate_diaries', { limit: 5 }).catch(() => {})
+    await invoke('regenerate_diaries', {
+      limit: 5,
+      minTaskMinutes: minMinutes.value,
+    }).catch(() => {})
     const d = await invoke<Diary | null>('get_diary', { day: selected.value })
     diary.value = d
     if (!d) {
@@ -92,7 +101,10 @@ async function forceUpdate() {
   msg.value = ''
   busy.value = true
   try {
-    const d = await invoke<Diary>('force_regenerate_day', { day: selected.value })
+    const d = await invoke<Diary>('force_regenerate_day', {
+      day: selected.value,
+      minTaskMinutes: minMinutes.value,
+    })
     diary.value = d
     if (!d || !d.source?.length) {
       msg.value = '该天暂无 10 分钟数据，无法生成日记。'
@@ -185,6 +197,17 @@ function shiftMonth(delta: number) {
           <div style="display:flex; gap:8px; align-items:center">
             <button class="btn" @click="loadDiary" :disabled="busy">刷新</button>
             <button class="btn primary" @click="forceUpdate" :disabled="busy">更新</button>
+            <label class="min-minutes" title="控制 LLM 生成主要事项时统计的最低任务时长">
+              仅 ≥
+              <input
+                v-model.number="minMinutes"
+                type="number"
+                min="0"
+                step="5"
+                class="min-minutes-input"
+              />
+              分钟
+            </label>
           </div>
         </div>
       </div>
@@ -199,12 +222,14 @@ function shiftMonth(delta: number) {
         <template v-if="diary && diary.status === 'done'">
           <div class="diary-content">
             <div class="d-sec"><b>简短总结</b><p>{{ diary.brief || '—' }}</p></div>
-            <div class="d-sec"><b>主要事项</b>
+            <div class="d-sec">
+              <b>主要事项</b>
               <ol class="top3-list">
-                <li v-for="(t, i) in diary.top3" :key="i">
+                <li v-for="(t, i) in filteredTop3" :key="i">
                   {{ t.text }}
                   <span v-if="t.minutes > 0" class="task-dur">约 {{ t.minutes }} 分钟</span>
                 </li>
+                <li v-if="!filteredTop3.length" class="muted top3-empty">无符合条件的任务</li>
               </ol>
             </div>
             <div class="d-sec"><b>高光</b>
@@ -454,6 +479,45 @@ function shiftMonth(delta: number) {
   border-radius: 8px;
   padding: 1px 6px;
   vertical-align: middle;
+}
+/* 主要事项标题行：标题 + 分钟阈值输入框同行右对齐 */
+.top3-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+.top3-head b {
+  display: block;
+  font-size: 12px;
+  color: #aeb4dc;
+  letter-spacing: 0.06em;
+}
+.min-minutes {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #8b90b5;
+}
+.min-minutes-input {
+  width: 64px;
+  padding: 2px 6px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+.min-minutes-input:focus {
+  border-color: rgba(122,165,255,0.7);
+  background: rgba(122,165,255,0.1);
+}
+.top3-empty {
+  font-size: 12px;
+  padding-left: 4px;
 }
 .tip {
   color: #9be8c8;
