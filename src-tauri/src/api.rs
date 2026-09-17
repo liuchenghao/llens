@@ -1,11 +1,12 @@
 use std::sync::atomic::Ordering;
 use tauri::State;
+use tauri::Emitter;
 use chrono::{Duration, NaiveDate};
 use serde::Serialize;
 
 use crate::capture::Frame;
 use crate::diary::Diary;
-use crate::qasearch::{self, Plan};
+use crate::qasearch::{self, Plan, ConvTurn, QaAnswer};
 use crate::search::Hit;
 use crate::store::{Config, T10};
 use crate::tstate::{self, AppState};
@@ -258,23 +259,50 @@ pub async fn regenerate_diaries(
     Ok(out)
 }
 
-/// One QA search round (local, no LLM).
+/// One QA search round (local, no LLM). `limit` 为 0 时用 plan.limit，否则用该值（前端可动态调整）。
 #[tauri::command]
-pub fn qa_search(plan: Plan) -> Vec<Hit> {
-    qasearch::search_round(&root(), &plan)
+pub fn qa_search(plan: Plan, limit: Option<i64>) -> Vec<Hit> {
+    qasearch::search_round(&root(), &plan, limit.unwrap_or(0))
 }
 
 #[tauri::command]
-pub async fn qa_plan(question: String) -> Result<Plan, String> {
-    qasearch::plan(&cfg(), &question).await
+pub async fn qa_plan(question: String, history: Option<Vec<ConvTurn>>) -> Result<Plan, String> {
+    qasearch::plan(&cfg(), &question, history.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn qa_refine(question: String, prev_hits: Vec<Hit>) -> Result<Plan, String> {
-    qasearch::refine(&cfg(), &question, &prev_hits).await
+pub async fn qa_refine(
+    question: String,
+    prev_hits: Vec<Hit>,
+    history: Option<Vec<ConvTurn>>,
+) -> Result<Plan, String> {
+    qasearch::refine(&cfg(), &question, &prev_hits, history.as_deref()).await
 }
 
+/// QA 最终回答：基于累积命中生成回答，并按 layer/time 定位到来源。
+/// 返回结构体而非纯字符串，便于前端渲染可点引用。
 #[tauri::command]
-pub async fn qa_answer(question: String, hits: Vec<Hit>) -> Result<String, String> {
-    qasearch::answer(&cfg(), &question, &hits).await
+pub async fn qa_answer(
+    question: String,
+    hits: Vec<Hit>,
+    history: Option<Vec<ConvTurn>>,
+) -> Result<QaAnswer, String> {
+    let text = qasearch::answer(&cfg(), &question, &hits, history.as_deref()).await?;
+    let citations = qasearch::citations(&text, &hits);
+    Ok(QaAnswer {
+        text,
+        citations,
+    })
+}
+
+/// QA 跳转：点击来源引用时，通知前端切到对应 tab 并定位到该日期/帧。
+#[tauri::command]
+pub fn qa_jump(app: tauri::AppHandle, layer: String, time: String) -> Result<(), String> {
+    let date = time.chars().take(10).collect::<String>(); // "YYYY-MM-DD"
+    let target: &str = match layer.as_str() {
+        "diary" => "diary",
+        _ => "overview",
+    };
+    let _ = app.emit("qa_jump", serde_json::json!({ "layer": layer, "time": date, "target": target }));
+    Ok(())
 }

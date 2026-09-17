@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 type Task = {
@@ -130,6 +130,19 @@ onMounted(async () => {
   month.value = m - 1
   // 进入页面：只读磁盘已有日记，不触发 LLM（符合「进入不自动刷新」）
   await loadDiaryOnly()
+})
+
+// 问答跳转：监听 window 的 llens_jump 事件，定位到指定日期
+let jumpHandler: ((e: Event) => void) | null = null
+onMounted(() => {
+  jumpHandler = (e: Event) => {
+    const detail = (e as CustomEvent).detail
+    if (detail?.time && detail.time !== selected.value) pickDate(detail.time, true)
+  }
+  window.addEventListener('llens_jump', jumpHandler)
+})
+onBeforeUnmount(() => {
+  if (jumpHandler) window.removeEventListener('llens_jump', jumpHandler)
 })
 
 function pickDate(day: string, inMonth: boolean) {

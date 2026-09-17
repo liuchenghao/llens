@@ -45,6 +45,7 @@ pub fn run() {
             api::qa_plan,
             api::qa_answer,
             api::qa_refine,
+            api::qa_jump,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

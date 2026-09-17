@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 type Frame = {
@@ -232,8 +232,8 @@ async function load() {
   errMsg.value = ''
   try {
     dataRoot.value = await invoke<string>('data_root')
-    const day = new Date()
-    const d = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+    // 默认今天；被 jump 设过则用指定日期
+    const d = selDay.value
     frames.value = await invoke<Frame[]>('list_day', { day: d })
     // 重新拉取帧后，把草稿同步为当前已应用的筛选，避免下拉框显示过期的选中值
     draftActivity.value = filterActivity.value
@@ -253,7 +253,36 @@ function refreshOptions() {
   load()
 }
 
-onMounted(load)
+// 当前展示日期（默认今天；问答跳转时切换）
+function todayStr() {
+  const day = new Date()
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+}
+const selDay = ref(todayStr())
+
+// 问答跳转：监听 window 的 llens_jump 事件，加载指定日期
+let jumpHandler: ((e: Event) => void) | null = null
+onBeforeUnmount(() => {
+  if (jumpHandler) window.removeEventListener('llens_jump', jumpHandler)
+})
+// 顶部日期切换控件
+function changeDay(v: string) {
+  if (!v) return
+  selDay.value = v
+  load()
+}
+
+onMounted(() => {
+  load()
+  jumpHandler = (e: Event) => {
+    const detail = (e as CustomEvent).detail
+    if (detail?.time) {
+      selDay.value = detail.time
+      load()
+    }
+  }
+  window.addEventListener('llens_jump', jumpHandler)
+})
 setInterval(load, 30000)
 
 // 翻页或已应用筛选变化后，确保新可见页的图已加载（草稿变化不触发）
@@ -278,12 +307,17 @@ const timeRange = computed(() => {
 })
 </script><template>
   <div class="overview-root">
-    <h1 class="page">今日概览</h1>
+    <h1 class="page">概览</h1>
     <div class="row">
       <div class="glass card">
-        <h3>今日帧数</h3>
+        <h3>{{ selDay === todayStr() ? '今日' : '当日' }}帧数</h3>
         <div class="big-num">{{ filtered.length }}</div>
         <div class="muted">每 20 秒一帧 · 自动记录</div>
+        <div class="day-pick">
+          <span class="muted small">查看日期</span>
+          <input type="date" :value="selDay" @change="changeDay(($event as any).target.value)" class="date-input" />
+          <button class="btn small" @click="selDay = todayStr(); load()">回到今天</button>
+        </div>
       </div>
       <div class="glass card" style="flex: 1">
         <h3>活动分布</h3>
@@ -452,6 +486,21 @@ const timeRange = computed(() => {
 </template>
 
 <style scoped>
+.day-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.date-input {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9cde8;
+}
 /* outer flex column: fills remaining content area, bottom 30px */
 .overview-root {
   display: flex;
