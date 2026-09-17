@@ -10,6 +10,7 @@ type Frame = {
   activity?: string
   app?: string
   project?: string
+  rest?: boolean
 }
 type T10 = {
   bucket: number
@@ -314,12 +315,18 @@ function setGran(g: Gran) {
   load()
 }
 
-const kpi = computed(() => ({
-  frames: frames.value.length,
-  minutes: Math.round((frames.value.length * 20) / 60),
-  t10: t10.value.length,
-  apps: new Set(frames.value.map((f) => f.app)).size,
-}))
+const kpi = computed(() => {
+  // 工作时长只统计非休息帧；休息帧（熄屏/黑屏）单独计。
+  const workFrames = frames.value.filter((f) => !f.rest)
+  const restFrames = frames.value.filter((f) => f.rest)
+  return {
+    frames: frames.value.length,
+    workMinutes: Math.round((workFrames.length * 20) / 60),
+    restMinutes: Math.round((restFrames.length * 20) / 60),
+    t10: t10.value.length,
+    apps: new Set(frames.value.map((f) => f.app)).size,
+  }
+})
 </script>
 
 <template>
@@ -342,7 +349,8 @@ const kpi = computed(() => ({
 
     <div class="kpi">
       <div class="glass card"><h3>帧数</h3><div class="big-num">{{ kpi.frames }}</div></div>
-      <div class="glass card"><h3>时长</h3><div class="big-num">{{ kpi.minutes }} <small>min</small></div></div>
+      <div class="glass card"><h3>工作</h3><div class="big-num">{{ kpi.workMinutes }} <small>min</small></div></div>
+      <div class="glass card"><h3>休息</h3><div class="big-num">{{ kpi.restMinutes }} <small>min</small></div></div>
       <div class="glass card"><h3>10分钟片段</h3><div class="big-num">{{ kpi.t10 }}</div></div>
       <div class="glass card"><h3>应用数</h3><div class="big-num">{{ kpi.apps }}</div></div>
     </div>

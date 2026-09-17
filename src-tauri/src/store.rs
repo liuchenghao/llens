@@ -158,7 +158,11 @@ pub async fn write_10min_summary(
     let end = start + Duration::minutes(10);
     let frames = collect_frames_in_range(root, &start, &end);
 
-    let mut activities: Vec<String> = frames
+    // 排除休息帧（熄屏/黑屏）：它们不计入活动/应用统计，单独作为"休息"归类。
+    let active_frames: Vec<&Frame> = frames.iter().filter(|f| !f.rest).collect();
+    let rest_count: u32 = frames.iter().filter(|f| f.rest).count() as u32;
+
+    let mut activities: Vec<String> = active_frames
         .iter()
         .filter_map(|f| f.activity.clone())
         .collect();
@@ -167,7 +171,7 @@ pub async fn write_10min_summary(
     let mut app_counts: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
     let mut cat: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    for f in &frames {
+    for f in &active_frames {
         if let Some(a) = &f.app {
             if a != "unknown" {
                 *app_counts.entry(a.clone()).or_insert(0) += 1;
@@ -177,13 +181,20 @@ pub async fn write_10min_summary(
             *cat.entry(c.clone()).or_insert(0) += 1;
         }
     }
+    // 休息帧单独计入"休息"类别，便于看板区分工作/休息。
+    if rest_count > 0 {
+        *cat.entry("休息".to_string()).or_insert(0) += rest_count;
+        if !activities.contains(&"休息".to_string()) {
+            activities.push("休息".to_string());
+        }
+    }
     let mut top_apps: Vec<(String, u32)> = app_counts.into_iter().collect();
     top_apps.sort_by(|a, b| b.1.cmp(&a.1));
     let top_apps = top_apps.into_iter().take(5).map(|(k, _)| k).collect();
 
     let mut narrative = String::new();
-    if !frames.is_empty() {
-        let texts: Vec<String> = frames
+    if !active_frames.is_empty() {
+        let texts: Vec<String> = active_frames
             .iter()
             .take(30)
             .map(|f| {
@@ -212,6 +223,9 @@ pub async fn write_10min_summary(
             Ok(t) => narrative = t.trim().to_string(),
             Err(e) => eprintln!("10min narrative failed: {e}"),
         }
+    } else if rest_count > 0 {
+        // 整个时段都在休息（熄屏/黑屏），不调 LLM，直接标记。
+        narrative = "该时段屏幕处于熄灭/黑屏状态，用户未在电脑前，计为休息。".to_string();
     }
 
     let t10 = T10 {

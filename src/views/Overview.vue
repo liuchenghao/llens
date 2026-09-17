@@ -14,6 +14,7 @@ type Frame = {
   activity?: string
   app?: string
   project?: string
+  rest?: boolean
 }
 
 const frames = ref<Frame[]>([])
@@ -435,20 +436,27 @@ const timeRange = computed(() => {
       <div v-if="loading && !frames.length" class="muted">加载中…</div>
       <div v-else-if="!filtered.length" class="muted">暂无数据{{ frames.length ? '（当前筛选无命中）' : '（刚启动？等待前几帧）' }}</div>
       <div v-else class="timeline">
-        <div v-for="(f) in pagedFrames" :key="f.time" class="tl-item">
+        <div v-for="(f) in pagedFrames" :key="f.time" class="tl-item" :class="{ rest: f.rest }">
           <img
-            v-if="thumbCompose[f.time] || thumbOf(f)"
+            v-if="!f.rest && (thumbCompose[f.time] || thumbOf(f))"
             :src="thumbCompose[f.time] || imgSrc(thumbOf(f))"
             class="thumb"
             alt=""
             @click="openPreview(f)"
           />
+          <div v-else-if="f.rest" class="rest-badge" title="屏幕熄灭/黑屏，计为休息，未生成截图">
+            <span class="rest-icon">☾</span>
+            <span>休息</span>
+          </div>
           <div class="tl-body">
             <div class="tl-head">
               <span class="tl-time">{{ f.time.slice(11, 16) }}</span>
-              <span v-if="f.app" class="chip">{{ f.app }}</span>
-              <span v-if="f.activity" class="chip warn">{{ f.activity }}</span>
-              <span v-if="f.project" class="chip">项目: {{ f.project }}</span>
+              <template v-if="!f.rest">
+                <span v-if="f.app" class="chip">{{ f.app }}</span>
+                <span v-if="f.activity" class="chip warn">{{ f.activity }}</span>
+                <span v-if="f.project" class="chip">项目: {{ f.project }}</span>
+              </template>
+              <span v-else class="chip warn">休息</span>
             </div>
             <div class="tl-sent">
               <span v-for="(s, j) in f.summary5" :key="j">{{ s }}&nbsp;</span>
@@ -758,6 +766,24 @@ const timeRange = computed(() => {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
+.rest-badge {
+  width: 120px;
+  height: 66px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #8b90b5;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.rest-icon { font-size: 20px; opacity: .8; }
+
 .thumb {
   width: auto;
   max-width: 220px;

@@ -5,6 +5,7 @@ pub mod qasearch;
 pub mod search;
 pub mod store;
 pub mod tstate;
+mod display;
 
 use tauri::Manager;
 

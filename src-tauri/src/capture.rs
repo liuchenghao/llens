@@ -32,6 +32,10 @@ pub struct Frame {
     pub app: Option<String>,
     /// project name/workspace hint (or "unknown")
     pub project: Option<String>,
+    /// 熄屏/黑屏时段标记：true 表示该帧检测到屏幕熄灭（未生成截图、未调 LLM），
+    /// 该时段计入休息而非工作。旧数据默认 false。
+    #[serde(default)]
+    pub rest: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -229,6 +233,41 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         .map_err(|e| format!("mkdir screenshots: {e}"))?;
     let base_stem = now.format("%H%M%S").to_string();
 
+    // 0) Screen-off / blackout check: when the main display is asleep (screen
+    //    off, lid closed, or blackout app) we record a lightweight "rest" frame
+    //    instead of taking a screenshot or calling the LLM. This period counts
+    //    as rest, not work, and no image is generated on disk.
+    if super::display::main_display_asleep() {
+        let rest_frame = Frame {
+            time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+            image: String::new(),
+            extra_images: Vec::new(),
+            thumb: String::new(),
+            preview: String::new(),
+            extra_thumbs: Vec::new(),
+            extra_previews: Vec::new(),
+            summary5: vec!["屏幕熄灭，处于休息状态".to_string()],
+            activity: Some("休息".to_string()),
+            app: None,
+            project: None,
+            rest: true,
+        };
+        // Still append the rest frame so the 10-min slice can count this
+        // period as rest. No screenshots are written.
+        append_hour_frame(data_root, &now, &rest_frame);
+        let bucket = (now.timestamp() / 600) * 600;
+        let sfile = super::store::sum_file_for(data_root, &now, bucket);
+        if !sfile.exists() {
+            let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
+            let cfg_clone = cfg.clone();
+            let root_clone = data_root.clone();
+            tokio::spawn(async move {
+                let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3).await;
+            });
+        }
+        return Ok(rest_frame);
+    }
+
     /// Capture one display. display 1 is always the main display.
     fn capture_display(shot_dir: &PathBuf, stem: &str, display: u32) -> Option<std::path::PathBuf> {
         let fname = if display == 1 {
@@ -361,6 +400,7 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         activity,
         app,
         project,
+        rest: false,
     };
 
     // 6) Remove the original full-size PNGs (compressed copies already written).
