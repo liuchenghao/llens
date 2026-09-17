@@ -180,16 +180,18 @@ function shiftMonth(delta: number) {
           <div class="cal-title">{{ year }} 年 {{ month + 1 }} 月</div>
           <button class="btn" @click="shiftMonth(1)">›</button>
         </div>
-        <div class="cal-dow"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
-        <div class="cal">
-          <div
-            v-for="c in days"
-            :key="c.day"
-            :class="['cal-day', { out: !c.inMonth, sel: selected === c.day, dot: hasDiary.has(c.day), today: c.day === today() }]"
-            @click="pickDate(c.day, c.inMonth)"
-          >
-            {{ c.label }}
-            <span v-if="hasDiary.has(c.day)" class="dot-mark" />
+        <div class="cal-body">
+          <div class="cal-dow"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+          <div class="cal">
+            <div
+              v-for="c in days"
+              :key="c.day"
+              :class="['cal-day', { out: !c.inMonth, sel: selected === c.day, dot: hasDiary.has(c.day), today: c.day === today() }]"
+              @click="pickDate(c.day, c.inMonth)"
+            >
+              {{ c.label }}
+              <span v-if="hasDiary.has(c.day)" class="dot-mark" />
+            </div>
           </div>
         </div>
         <div class="cal-legend">
@@ -282,6 +284,10 @@ function shiftMonth(delta: number) {
   overflow: hidden;
   flex: 0 0 42%;   /* 固定占 42%，不随内容伸缩，保证与右侧并排 */
   min-width: 0;
+}
+.diary-cal .cal-body {
+  flex: 1;
+  overflow: hidden;
 }
 .diary-cal .cal {
   flex: 1;
@@ -417,6 +423,12 @@ function shiftMonth(delta: number) {
   justify-content: space-between;
   align-items: center;
   margin-top: 10px;
+}
+/* 日历卡片内按钮：紧凑尺寸，与分钟输入框高度对齐 */
+.cal-legend .btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 8px;
 }
 .diary-head {
   display: flex;
