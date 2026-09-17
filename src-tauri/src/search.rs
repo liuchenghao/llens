@@ -89,7 +89,10 @@ fn frame_hit(f: &Frame, kw: &str) -> Option<Hit> {
             layer: "frame".into(),
             time: f.time.clone(),
             text: trunc(&f.summary5.join(" "), 200),
-            source: f.image.clone(),
+            source: {
+                // 新帧 image 为空，优先用 preview/thumb；旧帧 image 有原图路径
+                if f.preview.is_empty() { f.image.clone() } else { f.preview.clone() }
+            },
         })
     } else {
         None

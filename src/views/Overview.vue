@@ -144,9 +144,6 @@ function filteredActivityOptions() {
 
 // image cache: abs path -> data URL (sync read, async fill)
 const imgUrls = ref<Record<string, string>>({})
-// 多屏合成缓存：帧 time -> 合成后的单张 dataURL（横向拼接所有屏幕）。
-// 仅用于时间轴缩略图（一张合成图）；预览弹窗仍逐屏独立显示。
-const thumbCompose = ref<Record<string, string>>({})
 
 function absOf(rel: string): string {
   return rel.startsWith('/') ? rel : `${dataRoot.value}/${rel}`
@@ -156,21 +153,13 @@ function imgSrc(rel: string): string {
   return imgUrls.value[absOf(rel)] || 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
 }
 
-// 时间轴显示：优先用缩略图（<100KB），没有则回退到原图路径
+// 时间轴显示：优先用合成缩略图（<100KB，后端已横向拼接所有屏幕），没有则回退到原图路径
 function thumbOf(f: Frame): string {
   return f.thumb || f.image
-}
-function extraThumbOf(f: Frame, i: number): string {
-  const et = f.extra_thumbs || []
-  return et[i] || (f.extra_images || [])[i] || ''
 }
 // 大图预览：优先用压缩预览图（<1MB），没有则回退到原图路径
 function previewOf(f: Frame): string {
   return f.preview || f.image
-}
-function extraPreviewOf(f: Frame, i: number): string {
-  const ep = f.extra_previews || []
-  return ep[i] || (f.extra_images || [])[i] || ''
 }
 
 // Fill the cache with base64 data URLs via Tauri command (works with any data root).
@@ -179,15 +168,19 @@ function extraPreviewOf(f: Frame, i: number): string {
 async function preloadImages() {
   const toLoad: string[] = []
   for (const f of pagedFrames.value) {
+    // 时间轴：合成缩略图（单张，已包含所有屏幕）
     const t = thumbOf(f)
     if (t && !imgUrls.value[absOf(t)]) toLoad.push(t)
+    // 预览弹窗：主屏预览图
     const p = previewOf(f)
     if (p && p !== t && !imgUrls.value[absOf(p)]) toLoad.push(p)
-    for (let i = 0; i < (f.extra_images || []).length; i++) {
-      const et = extraThumbOf(f, i)
-      if (et && !imgUrls.value[absOf(et)]) toLoad.push(et)
-      const ep = extraPreviewOf(f, i)
-      if (ep && ep !== et && !imgUrls.value[absOf(ep)]) toLoad.push(ep)
+    // 预览弹窗：各副屏独立预览图
+    for (const ep of f.extra_previews || []) {
+      if (ep && !imgUrls.value[absOf(ep)]) toLoad.push(ep)
+    }
+    // 兼容旧数据：extra_images（原图路径）
+    for (const ei of f.extra_images || []) {
+      if (ei && !imgUrls.value[absOf(ei)]) toLoad.push(ei)
     }
   }
   if (!toLoad.length) return
@@ -198,64 +191,6 @@ async function preloadImages() {
     } catch { /* placeholder remains */ }
   }
   imgUrls.value = { ...imgUrls.value } // trigger reactivity
-  // 将多屏缩略图横向拼接成一张合成图，供时间轴显示
-  await composeAll()
-}
-
-// 把一组截图 dataURL 横向拼接为一张合成图（等比缩放到 targetH 高度并排）。
-// 只有一张时直接返回原图，不做多余拼接。
-function composeRow(urls: string[], targetH: number): Promise<string> {
-  const valid = urls.filter((u) => u && !u.startsWith('data:image/gif'))
-  if (valid.length === 0) return Promise.resolve('')
-  if (valid.length === 1) return Promise.resolve(valid[0])
-  return Promise.all(
-    valid.map(
-      (src) =>
-        new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image()
-          img.onload = () => resolve(img)
-          img.onerror = () => reject(new Error('img load failed'))
-          img.src = src
-        }),
-    ),
-  ).then((imgs) => {
-    // 按目标高度等比缩放
-    const parts = imgs.map((img) => {
-      const h = targetH
-      const w = Math.max(1, Math.round((img.naturalWidth / img.naturalHeight) * targetH))
-      return { img, w, h }
-    })
-    const canvas = document.createElement('canvas')
-    canvas.width = parts.reduce((a, p) => a + p.w, 0)
-    canvas.height = targetH
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return Promise.resolve(valid[0])
-    let x = 0
-    for (const p of parts) {
-      ctx.drawImage(p.img, x, 0, p.w, p.h)
-      x += p.w
-    }
-    return Promise.resolve(canvas.toDataURL('image/jpeg', 0.85))
-  })
-}
-
-// 对当前页所有帧，把 主屏+副屏 的缩略图拼成一张合成图（仅缩略图；预览仍逐屏独立）。
-async function composeAll() {
-  for (const f of pagedFrames.value) {
-    // 缩略图合成：主屏 thumb + 各副屏 extra_thumbs（回退原图）
-    const thumbSet: string[] = []
-    const tMain = thumbOf(f)
-    if (tMain) thumbSet.push(imgSrc(tMain))
-    for (let i = 0; i < (f.extra_images || []).length; i++) {
-      const et = extraThumbOf(f, i)
-      if (et) thumbSet.push(imgSrc(et))
-    }
-    if (thumbSet.length) {
-      thumbCompose.value[f.time] = await composeRow(thumbSet, 66)
-    }
-  }
-  // 触发响应式
-  thumbCompose.value = { ...thumbCompose.value }
 }
 
 function openPreview(f: Frame) { previewFrame.value = f }
@@ -438,8 +373,8 @@ const timeRange = computed(() => {
       <div v-else class="timeline">
         <div v-for="(f) in pagedFrames" :key="f.time" class="tl-item" :class="{ rest: f.rest }">
           <img
-            v-if="!f.rest && (thumbCompose[f.time] || thumbOf(f))"
-            :src="thumbCompose[f.time] || imgSrc(thumbOf(f))"
+            v-if="!f.rest && thumbOf(f)"
+            :src="imgSrc(thumbOf(f))"
             class="thumb"
             alt=""
             @click="openPreview(f)"

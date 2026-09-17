@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use image::{GenericImage, ImageEncoder};
+use image::imageops::FilterType;
 use super::store::Config;
 
 /// Frame-level record: one screenshot + its AI understanding.
@@ -65,11 +67,63 @@ pub async fn run_loop(handle: tauri::AppHandle) {
 
 // ---------- shared summarization helpers ----------
 
-/// Compress a screenshot to a JPEG data-URL (≤1280px, q70).
+/// Compress a screenshot file to a JPEG data-URL (≤1280px, q70).
 async fn compress_to_data_url(p: &std::path::Path) -> Result<String, String> {
     let img = std::fs::read(p).map_err(|e| format!("read shot {}: {e}", p.display()))?;
     let (_jpeg, data_url) = compress_for_llm(&img).await?;
     Ok(data_url)
+}
+
+/// Stitch the per-display preview JPEGs horizontally into a single composed
+/// timeline thumbnail. All displays are resized to a common height (66px),
+/// concatenated side-by-side, and encoded as JPEG <100KB.
+fn compose_displays_thumb(
+    display_paths: &[std::path::PathBuf],
+    out_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if display_paths.is_empty() {
+        return Err("no display images".into());
+    }
+    let target_h: u32 = 66;
+    let imgs: Vec<image::DynamicImage> = display_paths
+        .iter()
+        .map(|p| image::open(p).map_err(|e| format!("open {}: {e}", p.display())))
+        .collect::<Result<Vec<_>, String>>()?;
+    // Resize each to target height, preserving aspect ratio
+    let total_w: u32 = imgs
+        .iter()
+        .map(|img| {
+            ((img.width() as f64 * target_h as f64 / img.height().max(1) as f64))
+                .round()
+                .max(1.0) as u32
+        })
+        .sum();
+    let mut canvas = image::DynamicImage::new_rgb8(total_w, target_h);
+    let mut x = 0u32;
+    for img in &imgs {
+        let w = ((img.width() as f64 * target_h as f64 / img.height().max(1) as f64))
+            .round()
+            .max(1.0) as u32;
+        let resized = img.resize(w, target_h, FilterType::Lanczos3);
+        let _ = canvas.copy_from(&resized, x, 0); // OOB tail safe to ignore
+        x += resized.width();
+    }
+    // Encode JPEG, iterate quality 75→45 if >100KB.
+    let rgb = canvas.to_rgb8();
+    let (w, h) = (rgb.width(), rgb.height());
+    let rgb_buf: Vec<u8> = rgb.into_raw();
+    for q in [75u8, 70, 60, 50, 45] {
+        let mut buf: Vec<u8> = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, q);
+        encoder
+            .write_image(&rgb_buf, w, h, image::ExtendedColorType::Rgb8)
+            .map_err(|e| format!("jpeg encode: {e}"))?;
+        if buf.len() <= 100_000 || q == 45 {
+            std::fs::write(out_path, &buf).map_err(|e| format!("write thumb: {e}"))?;
+            break;
+        }
+    }
+    Ok(out_path.to_path_buf())
 }
 
 /// Build the frame-summarization prompt.
@@ -321,11 +375,71 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         }
     }
 
-    // 2) Compress every display to JPEG ≤1280px — upstream LLM 500s on
-    // multi-MB PNG payloads (Retina 3x full-screen PNGs are 5-10MB each).
-    let all_paths = std::iter::once(main_path.clone()).chain(extra_paths.clone()).collect::<Vec<_>>();
-    let data_urls = futures_join_paths(&all_paths).await?;
+    // 2) Generate per-display preview JPEGs (≤2048px, <1MB) → kept on disk.
+    //    Main: {stem}.jpg ; Extra: {stem}_d{N}.jpg
+    let month = now.format("%Y-%m").to_string();
+    let main_preview = shot_dir.join(format!("{base_stem}.jpg"));
+    let main_preview_rel = format!("screenshots/{month}/{base_stem}.jpg");
+    let main_preview_ok = make_preview(&main_path, &main_preview).is_ok();
+    let mut extra_preview_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut extra_preview_rels: Vec<String> = Vec::new();
+    for ep in extra_paths.iter() {
+        let stem_extra = ep
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+            .trim_end_matches(".png")
+            .to_string();
+        let p_path = shot_dir.join(format!("{stem_extra}.jpg"));
+        if make_preview(ep, &p_path).is_ok() {
+            extra_preview_paths.push(p_path.clone());
+            extra_preview_rels.push(format!("screenshots/{month}/{stem_extra}.jpg"));
+        }
+    }
 
+    // 3) Compose a single timeline thumbnail from all per-display previews.
+    //    Main preview (if available) + all extra previews → one horizontal row.
+    let thumb_path = shot_dir.join(format!("{base_stem}_t.jpg"));
+    let thumb_rel = format!("screenshots/{month}/{base_stem}_t.jpg");
+    let mut display_imgs: Vec<std::path::PathBuf> = Vec::new();
+    if main_preview_ok && main_preview.exists() {
+        display_imgs.push(main_preview.clone());
+    } else {
+        // fall back to the raw main PNG if preview generation failed
+        display_imgs.push(main_path.clone());
+    }
+    display_imgs.extend(extra_preview_paths.iter().cloned());
+    let thumb = match compose_displays_thumb(&display_imgs, &thumb_path) {
+        Ok(_path) => thumb_rel,
+        Err(e) => {
+            eprintln!("thumbnail composition failed: {e}");
+            String::new()
+        }
+    };
+
+    // 4) Delete the original full-size PNGs (LLM consumed them, previews written).
+    let mut originals_to_delete: Vec<std::path::PathBuf> = vec![main_path.clone()];
+    for ep in extra_paths.iter() {
+        originals_to_delete.push(ep.clone());
+    }
+    for p in &originals_to_delete {
+        let _ = std::fs::remove_file(p);
+    }
+
+    // 5) Run LLM summarization on the compressed preview JPEGs (same quality
+    //    as before, but read from the kept-on-disk previews instead of the
+    //    already-deleted original PNGs).
+    let all_paths: Vec<std::path::PathBuf> = {
+        let mut v = Vec::new();
+        if main_preview_ok {
+            v.push(main_preview.clone());
+        } else {
+            return Err("main preview generation failed; cannot summarize frame".into());
+        }
+        v.extend(extra_preview_paths.clone());
+        v
+    };
+    let data_urls = futures_join_paths(&all_paths).await?;
     let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
     let parsed = llm_summarize(cfg, &data_urls, all_paths.len(), &time_str).await;
 
@@ -343,58 +457,13 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
     let app = parsed["app"].as_str().map(|s| s.to_string());
     let project = parsed["project"].as_str().map(|s| s.to_string());
 
-    let main_rel = format!(
-        "screenshots/{}/{base_stem}.png",
-        now.format("%Y-%m")
-    );
-    let extra_rels: Vec<String> = extra_paths
-        .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-        .map(|fn2| format!("screenshots/{}/{}", now.format("%Y-%m"), fn2))
-        .collect();
-
-    // 5) Generate timeline thumbnails (<100KB) + large previews (<1MB) for each display,
-    //    then delete the original full-size PNGs (the LLM already consumed its copy).
-    let month = now.format("%Y-%m").to_string();
-    let thumb_rel = format!("screenshots/{}/{}_t.jpg", month, base_stem);
-    let preview_rel = format!("screenshots/{}/{}_p.jpg", month, base_stem);
-    let mut extra_thumb_rels: Vec<String> = Vec::new();
-    let mut extra_preview_rels: Vec<String> = Vec::new();
-    let mut originals_to_delete: Vec<std::path::PathBuf> = Vec::new();
-
-    if make_thumbnail(&main_path, &shot_dir.join(format!("{base_stem}_t.jpg"))).is_ok()
-        && make_preview(&main_path, &shot_dir.join(format!("{base_stem}_p.jpg"))).is_ok()
-    {
-        originals_to_delete.push(main_path.clone());
-    }
-    for ep in extra_paths.iter() {
-        // 与主屏一致：直接用完整 PathBuf 拼出 {stem}_t.jpg / {stem}_p.jpg，
-        // 避免 with_extension("_t.jpg") 产生 {stem}._t.jpg（多一个点）导致相对路径对不上。
-        let stem_extra = ep
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default()
-            .trim_end_matches(".png")
-            .to_string();
-        let t_path = shot_dir.join(format!("{stem_extra}_t.jpg"));
-        let p_path = shot_dir.join(format!("{stem_extra}_p.jpg"));
-        if make_thumbnail(ep, &t_path).is_ok() && make_preview(ep, &p_path).is_ok() {
-            extra_thumb_rels.push(format!("screenshots/{month}/{stem_extra}_t.jpg"));
-            extra_preview_rels.push(format!("screenshots/{month}/{stem_extra}_p.jpg"));
-            originals_to_delete.push(ep.clone());
-        }
-    }
-
-    let main_ok = !originals_to_delete.is_empty()
-        && originals_to_delete.iter().any(|p| p == &main_path);
-
     let frame = Frame {
         time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
-        image: main_rel,
-        extra_images: extra_rels,
-        thumb: if main_ok { thumb_rel } else { String::new() },
-        preview: if main_ok { preview_rel } else { String::new() },
-        extra_thumbs: extra_thumb_rels,
+        image: String::new(),
+        extra_images: Vec::new(),
+        thumb,
+        preview: if main_preview_ok { main_preview_rel } else { String::new() },
+        extra_thumbs: Vec::new(),
         extra_previews: extra_preview_rels,
         summary5,
         activity,
@@ -403,15 +472,10 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         rest: false,
     };
 
-    // 6) Remove the original full-size PNGs (compressed copies already written).
-    for p in &originals_to_delete {
-        let _ = std::fs::remove_file(p);
-    }
-
-    // 3) append to current-hour JSON atomically
+    // 6) append to current-hour JSON atomically
     append_hour_frame(data_root, &now, &frame);
 
-    // 4) maybe trigger a 10-min summary when crossing a boundary
+    // 7) maybe trigger a 10-min summary when crossing a boundary
     let bucket = (now.timestamp() / 600) * 600;
     let sfile = super::store::sum_file_for(data_root, &now, bucket);
     if !sfile.exists() {
@@ -479,24 +543,6 @@ async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
         &jpeg,
     );
     Ok((jpeg, format!("data:image/jpeg;base64,{b64}")))
-}
-
-/// Create a thumbnail JPEG (≤400px wide, q=72) from a source image on disk.
-/// Target: <100KB (Retina 3x at 400px q72 is typically 15-40KB).
-/// Writes to `out_path`; returns Ok on success.
-fn make_thumbnail(src: &std::path::Path, out_path: &std::path::Path) -> Result<(), String> {
-    let sips = std::process::Command::new("sips")
-        .args(["-Z", "400", "-s", "format", "jpeg", "-s", "formatOptions", "72"])
-        .arg(src)
-        .arg("--out")
-        .arg(out_path)
-        .output()
-        .map_err(|e| format!("sips thumb spawn: {e}"))?;
-    if !sips.status.success() {
-        let stderr = String::from_utf8_lossy(&sips.stderr);
-        return Err(format!("sips thumb failed: {stderr}"));
-    }
-    Ok(())
 }
 
 /// Create a large preview JPEG (≤2048px wide) from a source image on disk,
