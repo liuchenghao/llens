@@ -52,6 +52,7 @@ function pickPreset(q: string) {
 
 // 点击来源引用：在问答页内联预览该命中帧的截图；日记类则跳转日记页
 const previewHit = ref<Hit | null>(null)
+const previewCard = ref<HTMLElement | null>(null)
 const previewImg = ref('')
 const previewBusy = ref(false)
 const dataRoot = ref('')
@@ -73,26 +74,54 @@ async function showPreview(h: Hit) {
   previewImg.value = ''
   previewExtras.value = []
   previewBusy.value = true
+  // 渲染后滚动到预览卡片，让点击有可见反馈
+  requestAnimationFrame(() => {
+    previewCard.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+  type F = { time: string; extra_previews?: string[]; extra_images?: string[]; preview?: string; image?: string; thumb?: string }
+  const absOf = (rel: string) => (rel.startsWith('/') ? rel : `${dataRoot.value}/${rel}`)
+  const readImg = async (rel: string): Promise<string | null> => {
+    if (!rel) return null
+    try { return await invoke<string>('read_image_as_data_url', { path: absOf(rel) }) } catch { return null }
+  }
   try {
     if (!dataRoot.value) dataRoot.value = await invoke<string>('data_root')
-    // hit.source 是预览图相对路径（主屏）；读取为 data URL
-    const abs = h.source.startsWith('/') ? h.source : `${dataRoot.value}/${h.source}`
-    previewImg.value = await invoke<string>('read_image_as_data_url', { path: abs })
-    // 再拉当天帧，找到同时间帧的副屏预览图，一并展示多屏
+    // 拉当天帧；frame 层按时间精确/前缀匹配，t10 层按切片起点找最接近的帧
     const day = h.time.slice(0, 10)
-    type F = { time: string; extra_previews?: string[]; extra_images?: string[]; preview?: string; image?: string }
     const frames = await invoke<F[]>('list_day', { day })
-    const match = frames.find((f) => f.time === h.time) || frames.find((f) => f.time.startsWith(h.time))
+    let match: F | undefined
+    if (h.layer === 'frame') {
+      match = frames.find((f) => f.time === h.time) || frames.find((f) => f.time.startsWith(h.time))
+      if (!match && h.source) {
+        // frame 直接有图片路径（source），不依赖帧列表匹配
+        const p = await readImg(h.source)
+        if (p) previewImg.value = p
+      }
+    } else {
+      // t10：h.time 是 10 分钟对齐起点，取当天帧里时间 >= 起点的第一个帧（或最接近的）
+      const t0 = h.time
+      match = frames.find((f) => f.time === t0) ||
+        frames.find((f) => f.time.startsWith(t0)) ||
+        frames.find((f) => f.time >= t0) ||
+        (frames.length ? frames[frames.length - 1] : undefined)
+      if (match) {
+        // 优先 preview → thumb → image
+        const p = await readImg(match.preview || match.thumb || match.image || '')
+        if (p) previewImg.value = p
+      }
+    }
+    // 副屏预览图（若有）
     if (match) {
       const rels: string[] = []
       for (const p of match.extra_previews || []) rels.push(p)
       if (!rels.length) for (const p of match.extra_images || []) rels.push(p)
       for (const rel of rels.slice(0, 3)) {
-        const a = rel.startsWith('/') ? rel : `${dataRoot.value}/${rel}`
-        try { previewExtras.value.push(await invoke<string>('read_image_as_data_url', { path: a })) } catch { /* 缺图跳过 */ }
+        const a = await readImg(rel)
+        if (a) previewExtras.value.push(a)
       }
     }
   } catch (e: any) {
+    // 图读不到也不让卡片消失：保留 previewHit，仅把错误写进文本
     previewHit.value = { ...h, text: `${h.text}\n（预览图加载失败：${String(e).slice(0, 60)}）` }
   } finally {
     previewBusy.value = false
@@ -235,7 +264,7 @@ function newConversation() {
     </div>
 
     <!-- 内联预览：点击来源引用后显示该命中帧的截图 + 上下文 -->
-    <div v-if="previewHit" class="glass card">
+    <div v-if="previewHit" ref="previewCard" class="glass card">
       <div class="preview-head">
         <h3>来源预览</h3>
         <button class="preview-close" @click="closePreview">✕</button>
