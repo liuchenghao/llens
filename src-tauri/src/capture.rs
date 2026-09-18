@@ -187,17 +187,19 @@ async fn llm_summarize(cfg: &Config, data_urls: &[String], n_displays: usize, ti
 pub async fn retry_frame(cfg: &Config, data_root: &PathBuf, frame: &Frame) -> Result<Frame, String> {
     // 原图（image / extra_images）在 LLM 解释完成后已被删除；重试时
     // fallback 到压缩预览图（preview / extra_previews，≤2048px JPEG），质量足够 LLM 理解。
-    let shot = data_root.join(&frame.image);
-    let main_src: std::path::PathBuf = if shot.exists() {
-        shot
-    } else if !frame.preview.is_empty() {
-        data_root.join(&frame.preview)
+    // 若 image 为空字符串（rest 休息帧或老数据无图），直接报可读错误，避免把 data_root 目录当文件读。
+    let image = frame.image.trim();
+    let preview = frame.preview.trim();
+    let main_src: std::path::PathBuf;
+    if (!image.is_empty() && data_root.join(image).exists()) {
+        main_src = data_root.join(image);
+    } else if (!preview.is_empty() && data_root.join(preview).exists()) {
+        main_src = data_root.join(preview);
     } else {
         return Err(format!(
-            "screenshot not found: {} (and no preview image)",
-            frame.image
+            "该帧无可用截图（image = '{image}'，preview = '{preview}'），无法重新生成。rest 休息帧或未生成图的老帧不支持重试。"
         ));
-    };
+    }
     let mut paths: Vec<std::path::PathBuf> = vec![main_src];
     for (i, extra) in frame.extra_images.iter().enumerate() {
         let p = data_root.join(extra);

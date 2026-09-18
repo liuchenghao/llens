@@ -314,8 +314,15 @@ const timeRange = computed(() => {
         <div class="big-num">{{ filtered.length }}</div>
         <div class="muted">每 20 秒一帧 · 自动记录</div>
         <div class="day-pick">
-          <span class="muted small">查看日期</span>
-          <input type="date" :value="selDay" @change="changeDay(($event as any).target.value)" class="date-input" />
+          <label class="day-pick-label">
+            <span class="muted small">查看日期</span>
+            <input
+              type="date"
+              :value="selDay"
+              @change="changeDay(($event as any).target.value)"
+              class="date-input f-input"
+            />
+          </label>
           <button class="btn small" @click="selDay = todayStr(); load()">回到今天</button>
         </div>
       </div>
@@ -337,11 +344,6 @@ const timeRange = computed(() => {
         </div>
         <div v-else class="muted">—</div>
       </div>
-    </div>
-
-    <div class="glass card err-card" v-if="errMsg">
-      <h3>状态</h3>
-      <div class="chip warn">截屏读取失败：{{ errMsg }}（请检查屏幕录制权限）</div>
     </div>
 
     <div class="glass card timeline-card">
@@ -401,6 +403,10 @@ const timeRange = computed(() => {
           <button class="btn" @click="refreshOptions" :disabled="loading">更新</button>
           <button class="btn" @click="resetFilters" :disabled="!hasDraft && !filterActivity && !filterApp && !filterProject && !filterKeyword">清除</button>
         </div>
+      </div>
+      <div v-if="errMsg" class="status-row">
+        <span class="chip warn">状态</span>
+        <span class="chip warn">截屏读取失败：{{ errMsg }}（请检查屏幕录制权限）</span>
       </div>
       <div v-if="loading && !frames.length" class="muted">加载中…</div>
       <div v-else-if="!filtered.length" class="muted">暂无数据{{ frames.length ? '（当前筛选无命中）' : '（刚启动？等待前几帧）' }}</div>
@@ -491,15 +497,30 @@ const timeRange = computed(() => {
   align-items: center;
   gap: 8px;
   margin-top: 10px;
-  flex-wrap: wrap;
+  white-space: nowrap;
+}
+.day-pick-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .date-input {
   font-size: 12px;
   padding: 4px 8px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.05);
-  color: #c9cde8;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6e9ff;
+  outline: none;
+  cursor: pointer;
+  color-scheme: dark;
+}
+.date-input:hover {
+  border-color: rgba(143, 214, 255, 0.4);
+  background: rgba(143, 214, 255, 0.08);
+}
+.date-input:focus {
+  border-color: rgba(143, 214, 255, 0.6);
 }
 /* outer flex column: fills remaining content area, bottom 30px */
 .overview-root {
@@ -509,10 +530,18 @@ const timeRange = computed(() => {
   min-height: 0;
   
 }
-.overview-root > .row {
-  flex-shrink: 0;
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin: 8px 0;
+  border-radius: 10px;
+  background: rgba(255, 196, 111, 0.08);
+  border: 1px solid rgba(255, 196, 111, 0.25);
 }
-.overview-root > .err-card {
+.overview-root > .row {
   flex-shrink: 0;
 }
 .overview-root > .timeline-card {

@@ -7,6 +7,7 @@ type Plan = {
   layer: string
   days: number
   need_more: boolean
+  limit?: number
 }
 type Hit = { layer: string; time: string; text: string; source: string }
 type QaAnswer = { text: string; citations: number[] }
@@ -21,6 +22,14 @@ const err = ref('')
 const showTrajectory = ref(false) // 检索轨迹默认折叠
 // 会话历史：支持多轮追问（最多保留最近 3 轮）
 const history = ref<ConvTurn[]>([])
+
+// 单轮命中上限（可调，1-100）。默认 20。
+const hitLimit = ref<number>(20)
+function effectiveLimit(): number {
+  const v = Number(hitLimit.value)
+  if (!Number.isFinite(v) || v < 1) return 20
+  return Math.min(Math.max(v, 1), 100)
+}
 
 const historyParam = () => history.value.slice(-3)
 
@@ -105,7 +114,7 @@ onMounted(async () => {
   try { dataRoot.value = await invoke<string>('data_root') } catch { /* ignore */ }
 })
 
-// Agentic flow, hard limits: <= 3 search rounds, each round <= 20 hits x 200 chars.
+// Agentic flow, hard limits: <= 3 search rounds. 命中上限由 hitLimit 动态控制。
 async function ask() {
   if (!question.value.trim() || busy.value) return
   busy.value = true
@@ -113,11 +122,12 @@ async function ask() {
   answer.value = { text: '', citations: [] }
   rounds.value = []
   showTrajectory.value = false
+  const limit = effectiveLimit()
 
   try {
     // round 1: model plans the search (with history context for follow-ups)
     let plan = await invoke<Plan>('qa_plan', { question: question.value, history: historyParam() })
-    let hits = await invoke<Hit[]>('qa_search', { plan })
+    let hits = await invoke<Hit[]>('qa_search', { plan, limit })
     rounds.value.push({ plan, hits })
 
     // round 2: model may refine once (only if it still wants more AND we have budget)
@@ -128,7 +138,7 @@ async function ask() {
         history: historyParam(),
       })
       if (plan2.keywords.length && plan2.days > 0) {
-        const hits2 = await invoke<Hit[]>('qa_search', { plan: plan2 })
+        const hits2 = await invoke<Hit[]>('qa_search', { plan: plan2, limit })
         rounds.value.push({ plan: plan2, hits: hits2 })
         hits = [...hits, ...hits2]
       }
@@ -181,13 +191,25 @@ function newConversation() {
           {{ p }}
         </button>
       </div>
-      <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center">
+      <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center; flex-wrap: wrap">
         <button class="btn primary" @click="ask" :disabled="busy || !question.trim()">
           {{ busy ? '检索中…' : (history.length ? '追问' : '提问') }}
         </button>
         <button v-if="history.length" class="btn" @click="newConversation">新对话</button>
+        <label class="limit-label">
+          <span class="muted">单轮命中上限</span>
+          <input
+            type="number"
+            min="1"
+            max="100"
+            :value="hitLimit"
+            @change="hitLimit = Number(($event as any).target.value)"
+            class="limit-input"
+            :disabled="busy"
+          />
+        </label>
         <span class="muted" style="font-size: 11px">
-          agentic 检索 · 最多 3 轮 · 单轮 ≤ 20 条 × 200 字
+          agentic 检索 · 最多 3 轮 · 单轮 ≤ {{ effectiveLimit() }} 条 × 200 字
         </span>
       </div>
     </div>
@@ -283,6 +305,21 @@ function newConversation() {
 }
 .preset:disabled {
   opacity: 0.5;
+}
+.limit-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.limit-input {
+  width: 56px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9cde8;
+  font-size: 12px;
 }
 .citations {
   display: flex;

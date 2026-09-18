@@ -61,7 +61,7 @@ pub fn search_round(root: &PathBuf, plan: &Plan, limit_override: i64) -> Vec<Hit
     };
     let mut out: Vec<Hit> = Vec::new();
     for kw in plan.keywords.iter() {
-        let hits = super::search::search(root, layer, start, end, kw, limit as u32);
+        let hits = super::search::search(root, layer, start, end, kw, limit as usize);
         for h in hits {
             if !out.iter().any(|x| x.time == h.time && x.layer == h.layer) {
                 out.push(h);
