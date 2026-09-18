@@ -30,6 +30,19 @@ scripts/
   pack.sh       # 一键打包 + 安装 + 桌面快捷方式
 ```
 
+## 构建前置（macOS Xcode License 未授权）
+
+若环境未授权 Xcode / Command Line Tools License，Rust 编译中的 `ring` C 库与最终链接器会报错（`cc`/`xcrun` 找不到 SDK）。需指向 CLT 的 clang 与 SDK，并走本地 `ccwrap.sh` 包装器：
+
+```bash
+export SDKROOT=$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk | tail -1)
+export CC=/Users/$USER/bin/ccwrap.sh CXX=/Users/$USER/bin/ccwrap.sh   # 若包装器在别处请改路径
+cd src-tauri && cargo build
+cd .. && npx vue-tsc --noEmit   # 前端类型检查
+```
+
+`ccwrap.sh` 内部调用 CLT 的 clang + 上述 `SDKROOT`。授权了 License 的环境可跳过，直接 `cargo build`。
+
 ## 运行
 
 ```bash

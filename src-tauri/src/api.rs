@@ -70,9 +70,16 @@ pub fn data_root() -> String {
 /// a user-changed data directory.
 #[tauri::command]
 pub fn read_image_as_data_url(path: String) -> Result<String, String> {
-    let pb = std::path::Path::new(&path);
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("empty image path".to_string());
+    }
+    let pb = std::path::Path::new(trimmed);
     if !pb.exists() {
-        return Err(format!("file not found: {path}"));
+        return Err(format!("file not found: {trimmed}"));
+    }
+    if pb.is_dir() {
+        return Err(format!("path is a directory, not an image: {trimmed}"));
     }
     let bytes = std::fs::read(pb).map_err(|e| format!("read failed: {e}"))?;
     use base64::Engine;

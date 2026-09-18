@@ -90,8 +90,14 @@ fn frame_hit(f: &Frame, kw: &str) -> Option<Hit> {
             time: f.time.clone(),
             text: trunc(&f.summary5.join(" "), 200),
             source: {
-                // 新帧 image 为空，优先用 preview/thumb；旧帧 image 有原图路径
-                if f.preview.is_empty() { f.image.clone() } else { f.preview.clone() }
+                // 统一语义：frame 层 source = "frame:<预览图相对路径>"
+                // 新帧 image 为空，优先用 preview；thumb 兜底；都空则 "frame:"
+                let rel = if f.preview.is_empty() {
+                    if f.thumb.is_empty() { f.image.clone() } else { f.thumb.clone() }
+                } else {
+                    f.preview.clone()
+                };
+                format!("frame:{}", rel)
             },
         })
     } else {

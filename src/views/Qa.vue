@@ -86,17 +86,17 @@ async function showPreview(h: Hit) {
   }
   try {
     if (!dataRoot.value) dataRoot.value = await invoke<string>('data_root')
-    // 拉当天帧；frame 层按时间精确/前缀匹配，t10 层按切片起点找最接近的帧
+    // 拉当天帧；frame 层按时间匹配，t10 层按切片起点找最接近的帧
     const day = h.time.slice(0, 10)
     const frames = await invoke<F[]>('list_day', { day })
     let match: F | undefined
+    // 主屏图相对路径：frame 层可从 h.source 去掉 "frame:" 前缀直接取；t10 层需从匹配帧取
+    let mainRel = ''
     if (h.layer === 'frame') {
       match = frames.find((f) => f.time === h.time) || frames.find((f) => f.time.startsWith(h.time))
-      if (!match && h.source) {
-        // frame 直接有图片路径（source），不依赖帧列表匹配
-        const p = await readImg(h.source)
-        if (p) previewImg.value = p
-      }
+      // h.source 形如 "frame:<相对路径>"（可能为空），取冒号后部分
+      mainRel = h.source.startsWith('frame:') ? h.source.slice(6) : h.source
+      if (match) mainRel = match.preview || match.thumb || mainRel || ''
     } else {
       // t10：h.time 是 10 分钟对齐起点，取当天帧里时间 >= 起点的第一个帧（或最接近的）
       const t0 = h.time
@@ -104,11 +104,11 @@ async function showPreview(h: Hit) {
         frames.find((f) => f.time.startsWith(t0)) ||
         frames.find((f) => f.time >= t0) ||
         (frames.length ? frames[frames.length - 1] : undefined)
-      if (match) {
-        // 优先 preview → thumb → image
-        const p = await readImg(match.preview || match.thumb || match.image || '')
-        if (p) previewImg.value = p
-      }
+      if (match) mainRel = match.preview || match.thumb || match.image || ''
+    }
+    if (mainRel) {
+      const p = await readImg(mainRel)
+      if (p) previewImg.value = p
     }
     // 副屏预览图（若有）
     if (match) {
