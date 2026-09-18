@@ -24,6 +24,30 @@ body {
 
 /* ── root layout ──────────────────────────────────────────────────────────── */
 
+/* ── global thin scrollbar (4px) ─────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+
 .app {
   position: relative;
   display: flex;
@@ -208,7 +232,7 @@ body {
 }
 
 .content::-webkit-scrollbar {
-  width: 8px;
+  width: 4px;
 }
 .content::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
@@ -289,7 +313,7 @@ h1.page {
 /* ── buttons / inputs ─────────────────────────────────────────────────────── */
 
 button.btn {
-  padding: 9px 18px;
+  padding: 4px 12px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.08);
@@ -321,7 +345,7 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
   color: #eef0ff;
-  padding: 10px 12px;
+  padding: 4px 12px;
   font-size: 14px;
   font-family: inherit;
   width: 100%;
@@ -356,7 +380,7 @@ textarea {
     padding: 12px 16px;
     overflow-x: auto;
     overflow-y: hidden;
-    margin: 0 0 0 0;
+    margin: 10px 14px;
   }
   .logo { padding: 4px 0; }
   .nav nav {

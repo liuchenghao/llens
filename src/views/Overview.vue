@@ -505,9 +505,9 @@ const timeRange = computed(() => {
   gap: 6px;
 }
 .date-input {
-  font-size: 12px;
-  padding: 4px 8px;
-  border-radius: 8px;
+  font-size: 13px;
+  padding: 9px 18px;
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
   color: #e6e9ff;
@@ -584,10 +584,12 @@ const timeRange = computed(() => {
   gap: 10px;
   padding: 8px 4px 4px;
   flex-shrink: 0;
-  background: rgba(10,12,26,0.85);
-  backdrop-filter: blur(8px);
+  background: rgba(5, 6, 20, 0.42);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
   justify-content: flex-end;
-  border-radius: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   z-index: 10;
 }
 /* 分页按钮：与 .f-input 输入框同高度 */
@@ -747,9 +749,9 @@ const timeRange = computed(() => {
 .f-input {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 8px;
-  padding: 4px 10px;
-  font-size: 12px;
+  border-radius: 10px;
+  padding: 4px 12px;
+  font-size: 13px;
   color: #e6e9ff;
   outline: none;
   transition: all 0.15s;
@@ -829,12 +831,12 @@ const timeRange = computed(() => {
   line-height: 1.5;
 }
 .retry-btn {
-  padding: 3px 10px;
-  border-radius: 8px;
+  padding: 4px 12px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 176, 64, 0.5);
   background: rgba(255, 176, 64, 0.12);
   color: #ffcf94;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   margin-right: 8px;
   transition: all 0.2s;
@@ -848,19 +850,20 @@ const timeRange = computed(() => {
 }
 .retry-hint {
   font-size: 11px;
+  color: #8a8fb8;
+  margin-left: 8px;
 }
-
 /* image preview modal */
 .preview-overlay {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(5, 6, 20, 0.45);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
   display: flex;
   align-items: center;
   justify-content: center;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   animation: fadeIn 0.18s ease;
 }
 @keyframes fadeIn {
