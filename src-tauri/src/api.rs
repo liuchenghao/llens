@@ -332,3 +332,59 @@ pub fn qa_jump(app: tauri::AppHandle, layer: String, time: String) -> Result<(),
     let _ = app.emit("qa_jump", serde_json::json!({ "layer": layer, "time": date, "target": target }));
     Ok(())
 }
+
+// ---------- autostart (PRD §4.7 / 验收 7) ----------
+
+/// 当前是否已注册开机自启。
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    let mgr = tauri_plugin_autostart::ManagerExt::autolaunch(&app);
+    mgr.is_enabled().map_err(|e| e.to_string())
+}
+
+/// 开关开机自启：on=true 注册 LaunchAgent，false 移除。
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, on: bool) -> Result<bool, String> {
+    let mgr = tauri_plugin_autostart::ManagerExt::autolaunch(&app);
+    if on {
+        mgr.enable().map_err(|e| format!("enable autostart: {e}"))?;
+    } else {
+        mgr.disable().map_err(|e| format!("disable autostart: {e}"))?;
+    }
+    mgr.is_enabled().map_err(|e| e.to_string())
+}
+
+/// 在桌面创建指向本 App 的 .alias（macOS 快捷方式）；返回桌面路径。
+#[tauri::command]
+pub fn desktop_shortcut() -> Result<String, String> {
+    let home = std::env::var("HOME").map(std::path::PathBuf::from)
+        .map_err(|e| format!("no HOME: {e}"))?;
+    let desktop = home.join("Desktop");
+    let alias = desktop.join("LLens.alias");
+    // 定位当前可执行文件（App 内的 executable）
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("cannot resolve current exe: {e}"))?;
+    // 若从 App bundle 运行，取 .app 包路径作为快捷目标；否则用 exe 自身。
+    let target = {
+        let s = exe.to_string_lossy().to_string();
+        if let Some(pos) = s.find(".app/") {
+            s[..pos + 4].to_string() // 保留到 ".app"
+        } else {
+            s
+        }
+    };
+    // 写入 macOS alias 文件（AppleDouble 格式太复杂，改用 .command 脚本或 .alias plist）。
+    // 这里用 .command 启动脚本 + 桌面图标，最稳妥且可双击。
+    let command_script = desktop.join("LLens.command");
+    let content = format!("#!/bin/bash\nopen '{}'\n", target);
+    std::fs::write(&command_script, content)
+        .map_err(|e| format!("write desktop shortcut: {e}"))?;
+    // 赋予可执行权限（open 脚本需要）
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&command_script, std::fs::Permissions::from_mode(0o755));
+    }
+    let _ = &alias;
+    Ok(command_script.to_string_lossy().to_string())
+}

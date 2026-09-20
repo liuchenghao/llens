@@ -16,6 +16,10 @@ pub mod api;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(tstate::AppState::new())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -66,6 +70,9 @@ pub fn run() {
             api::qa_refine,
             api::qa_jump,
             api::days_with_slices,
+            api::get_autostart,
+            api::set_autostart,
+            api::desktop_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
