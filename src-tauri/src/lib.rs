@@ -73,6 +73,8 @@ pub fn run() {
             api::get_autostart,
             api::set_autostart,
             api::desktop_shortcut,
+            api::screen_permission,
+            api::open_screen_recording_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

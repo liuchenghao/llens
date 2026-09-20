@@ -333,8 +333,6 @@ pub fn qa_jump(app: tauri::AppHandle, layer: String, time: String) -> Result<(),
     Ok(())
 }
 
-// ---------- autostart (PRD §4.7 / 验收 7) ----------
-
 /// 当前是否已注册开机自启。
 #[tauri::command]
 pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
@@ -387,4 +385,63 @@ pub fn desktop_shortcut() -> Result<String, String> {
     }
     let _ = &alias;
     Ok(command_script.to_string_lossy().to_string())
+}
+
+// ---------- 屏幕录制权限引导（PRD §6 / P2） ----------
+
+/// 屏幕录制权限状态。通过一次试截图判断（macOS 未授权时 screencapture 失败）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScreenPermission {
+    pub granted: bool,
+    pub detail: String,
+}
+
+#[cfg(target_os = "macos")]
+fn probe_screen_permission() -> ScreenPermission {
+    use std::process::Command;
+    let tmp = std::env::temp_dir().join(format!("llens_perm_{}.png", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let out = Command::new("screencapture").arg("-x").arg(&tmp).output();
+    match out {
+        Ok(o) => {
+            let granted = o.status.success() && tmp.exists() && tmp.metadata().map(|m| m.len()).unwrap_or(0) > 0;
+            let _ = std::fs::remove_file(&tmp);
+            if granted {
+                ScreenPermission { granted: true, detail: "已授权".into() }
+            } else {
+                ScreenPermission {
+                    granted: false,
+                    detail: "未授权：screencapture 未产出图像".into(),
+                }
+            }
+        }
+        Err(e) => ScreenPermission {
+            granted: false,
+            detail: format!("检测失败: {e}"),
+        },
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn probe_screen_permission() -> ScreenPermission {
+    ScreenPermission { granted: true, detail: "非 macOS，跳过检测".into() }
+}
+
+/// 检查当前屏幕录制权限是否可用。
+#[tauri::command]
+pub fn screen_permission() -> ScreenPermission {
+    probe_screen_permission()
+}
+
+/// 打开系统「隐私与安全 → 屏幕与系统录音」页，便于用户手动授权。
+#[tauri::command]
+pub fn open_screen_recording_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn()
+            .map_err(|e| format!("open settings: {e}"))?;
+    }
+    Ok(())
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useCountUp } from '@/composables/useCountUp'
 import * as echarts from 'echarts'
 
 type Frame = {
@@ -327,6 +328,18 @@ const kpi = computed(() => {
     apps: new Set(frames.value.map((f) => f.app)).size,
   }
 })
+
+// P2 数字滚动动效（PRD §4.1）：KPI 数字刷新时平滑滚动而非瞬间跳变。
+const kFrames = computed(() => kpi.value.frames)
+const kWork = computed(() => kpi.value.workMinutes)
+const kRest = computed(() => kpi.value.restMinutes)
+const kT10 = computed(() => kpi.value.t10)
+const kApps = computed(() => kpi.value.apps)
+const cuFrames = useCountUp(kFrames)
+const cuWork = useCountUp(kWork)
+const cuRest = useCountUp(kRest)
+const cuT10 = useCountUp(kT10)
+const cuApps = useCountUp(kApps)
 </script>
 
 <template>
@@ -348,11 +361,11 @@ const kpi = computed(() => {
     <div v-if="errMsg" class="chip warn">{{ errMsg }}</div>
 
     <div class="kpi">
-      <div class="glass card"><h3>帧数</h3><div class="big-num">{{ kpi.frames }}</div></div>
-      <div class="glass card"><h3>工作</h3><div class="big-num">{{ kpi.workMinutes }} <small>min</small></div></div>
-      <div class="glass card"><h3>休息</h3><div class="big-num">{{ kpi.restMinutes }} <small>min</small></div></div>
-      <div class="glass card"><h3>10分钟片段</h3><div class="big-num">{{ kpi.t10 }}</div></div>
-      <div class="glass card"><h3>应用数</h3><div class="big-num">{{ kpi.apps }}</div></div>
+      <div class="glass card"><h3>帧数</h3><div class="big-num">{{ cuFrames }}</div></div>
+      <div class="glass card"><h3>工作</h3><div class="big-num">{{ cuWork }} <small>min</small></div></div>
+      <div class="glass card"><h3>休息</h3><div class="big-num">{{ cuRest }} <small>min</small></div></div>
+      <div class="glass card"><h3>10分钟片段</h3><div class="big-num">{{ cuT10 }}</div></div>
+      <div class="glass card"><h3>应用数</h3><div class="big-num">{{ cuApps }}</div></div>
     </div>
 
     <div class="row">

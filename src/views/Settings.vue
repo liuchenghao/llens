@@ -29,9 +29,23 @@ const rootBusy = ref(false)
 const rootSaved = ref(false)
 const rootErr = ref('')
 
+// PRD §6 权限引导（P2）：检测屏幕录制权限 + 打开系统设置。
+const perm = ref<{ granted: boolean; detail: string } | null>(null)
+async function checkPerm() {
+  try {
+    perm.value = await invoke<{ granted: boolean; detail: string }>('screen_permission')
+  } catch (e: any) {
+    perm.value = { granted: false, detail: `检测失败：${String(e).slice(0, 60)}` }
+  }
+}
+async function openPermSettings() {
+  await invoke('open_screen_recording_settings').catch(() => {})
+}
+
 onMounted(async () => {
   cfg.value = await invoke<Cfg>('get_config').catch(() => cfg.value)
   dataRoot.value = await invoke<string>('data_root').catch(() => '')
+  checkPerm()
 })
 
 async function save() {
@@ -160,6 +174,29 @@ async function runCleanupNow() {
     </div>
 
     <div class="glass card" style="max-width: 560px; margin-top:14px">
+      <h3>屏幕录制权限（PRD §6 / P2）</h3>
+      <div style="display:flex; align-items:center; gap:12px">
+        <div
+          class="perm-dot"
+          :style="perm ? (perm.granted ? { background: '#4ade80', boxShadow: '0 0 10px rgba(74,222,128,.6)' } : { background: '#f87171', boxShadow: '0 0 10px rgba(248,113,113,.6)' }) : { background: '#5a5f8a' }"
+        />
+        <div style="flex:1">
+          <div style="font-size:13px; font-weight:600; color:#fff">
+            {{ perm ? (perm.granted ? '已授权 — 可正常记录' : '未授权 — 仅记录休息时段') : '检测中…' }}
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:2px">{{ perm ? perm.detail : ' ' }}</div>
+        </div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:10px; align-items:center">
+        <button class="btn" @click="checkPerm">重新检测</button>
+        <button class="btn" @click="openPermSettings">打开系统权限设置</button>
+      </div>
+      <div class="muted" style="font-size:11px; margin-top:8px; line-height:1.5">
+        未授权时，screencapture 无法产出图像，LLens 会将该时段标记为「休息」而不生成截图；授权后自动恢复记录。
+      </div>
+    </div>
+
+    <div class="glass card" style="max-width: 560px; margin-top:14px">
       <h3>数据目录</h3>
       <div class="muted" style="font-size:12px; margin-bottom:10px">
         当前：<code>{{ dataRoot || '…' }}</code>
@@ -208,5 +245,12 @@ h3 {
 button.btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.perm-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: all 0.3s;
 }
 </style>
