@@ -431,33 +431,34 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         // 仅处理可能出现的双引号。
         // 双引号转义（Windows 路径里极少出现，但保险起见处理）
         let shot_arg = shot_str.replace('"', "\\\"");
-        // 用 Add-Type 内联 C# 调 Win32 + GDI 抓主屏，比 SystemInformation 更稳
-        // （部分精简版 Windows / PowerShell 受限语言模式下 SystemInformation 不可用）。
-        // 通过 GetSystemMetrics 拿主屏尺寸，用 System.Drawing.Bitmap.FromScreen 抓取。
-        let cs_code = r#"
-using System;
-using System.Drawing;
-using System.Runtime.InteropServices;
-public class LLensCapture {
-    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
-    public static void Capture(string path) {
-        int w = GetSystemMetrics(0);   // SM_CXSCREEN: 主屏宽
-        int h = GetSystemMetrics(1);   // SM_CYSCREEN: 主屏高
-        using (Bitmap bmp = new Bitmap(w, h)) {
-            using (Graphics g = Graphics.FromImage(bmp)) {
-                g.CopyFromScreen(0, 0, 0, new System.Drawing.Size(w, h), System.Drawing.CopyPixelOperation.SourceCopy);
-                bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-            }
-        }
-    }
-}
-"#;
-        // 原始 C# 里 \r\n 在 raw string 中是字面两个字符，保持原样即可，
-        // 直接交给 Add-Type（PowerShell 里 -TypeDefinition 接多行字符串）
-        let cs_code_arg = cs_code.to_string();
-        // PowerShell: Add-Type 定义类型，再调用 Capture(path)
+        // 方案：把 C# 源写到临时 .cs 文件，再 Add-Type -Path 编译加载。
+        // 这样完全避开 shell 单行化/换行/引号转义问题（之前 -TypeDefinition 多行内联
+        // 被 PowerShell 压成单行，导致 C# 编译器类型推导失败）。
+        let cs_code = "using System;\n"
+            + "using System.Drawing;\n"
+            + "using System.Runtime.InteropServices;\n"
+            + "public class LLensCapture {\n"
+            + "    [DllImport(\"user32.dll\")] static extern int GetSystemMetrics(int i);\n"
+            + "    public static void Capture(string path) {\n"
+            + "        int w = GetSystemMetrics(0); // SM_CXSCREEN\n"
+            + "        int h = GetSystemMetrics(1); // SM_CYSCREEN\n"
+            + "        Bitmap bmp = new Bitmap(w, h);\n"
+            + "        Graphics g = Graphics.FromImage(bmp);\n"
+            + "        // 源(0,0,0,0) 目标(0,0) 尺寸(w,h)：5 参数无歧义重载\n"
+            + "        g.CopyFromScreen(0, 0, 0, 0, new Size(w, h));\n"
+            + "        bmp.Save(path, ImageFormat.Png);\n"
+            + "        g.Dispose();\n"
+            + "        bmp.Dispose();\n"
+            + "    }\n"
+            + "}\n";
+        // 写到临时 .cs 文件
+        let tmp_cs = std::env::temp_dir().join(format!("llens_capture_{}.cs", std::process::id()));
+        std::fs::write(&tmp_cs, cs_code)
+            .map_err(|e| format!("write temp .cs: {e}"))?;
+        let tmp_cs_arg = tmp_cs.to_string_lossy().replace('"', "\\\"");
+        // PowerShell: Add-Type 从文件编译 C# 类，再调 Capture(path)
         let ps_cmd = format!(
-            "Add-Type -Language CSharp -TypeDefinition '{cs_code_arg}' -ReferencedAssemblies System.Drawing; [LLensCapture]::Capture('{shot_arg}')",
+            "Add-Type -Language CSharp -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
         );
         let out = std::process::Command::new("powershell")
             .arg("-NoProfile")
@@ -467,6 +468,7 @@ public class LLensCapture {
             .arg(&ps_cmd)
             .output()
             .map_err(|e| format!("spawn powershell: {e}"))?;
+        let _ = tmp_cs; // 文件已由 PowerShell 里 Remove-Item 清理
         if !out.status.success() || !shot_path.exists() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(format!("powershell screenshot failed: {stderr}"));
