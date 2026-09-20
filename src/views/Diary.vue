@@ -25,6 +25,40 @@ const filteredTop3 = computed(() =>
   (diary.value?.top3 || []).filter((t) => t.minutes >= minMinutes.value)
 )
 
+// 待生成日期：有 10min 数据但无日记（或已过期），日历用琥珀色标记 + 自动补生成
+const pendingDays = ref<Set<string>>(new Set())
+const catchupRunning = ref(false)
+const catchupDone = ref(false)
+
+// 刷新 days_with_slices → 计算 pendingDays（有数据但 has_diary=false 的天）
+async function refreshPending() {
+  const days = await invoke<{ date: string; slices: number; has_diary: boolean }[]>(
+    'days_with_slices',
+  ).catch(() => [])
+  pendingDays.value = new Set(days.filter((d) => !d.has_diary).map((d) => d.date))
+}
+
+// 自动补生成：把当前 pendingDays 里的日期（从旧到新）逐个生成，显示 spinner
+async function autoCatchup() {
+  if (catchupRunning.value || pendingDays.value.size === 0) return
+  catchupRunning.value = true
+  catchupDone.value = false
+  const days: string[] = [...pendingDays.value].sort()
+  for (const day of days) {
+    try {
+      await invoke('force_regenerate_day', { day, minTaskMinutes: minMinutes.value })
+    } catch {
+      /* 单天失败不阻断其余 */
+    }
+  }
+  catchupRunning.value = false
+  catchupDone.value = true
+  await refreshPending()
+  if (selected.value && pendingDays.value.has(selected.value)) {
+    await loadDiaryOnly()
+  }
+}
+
 const today = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -130,6 +164,8 @@ onMounted(async () => {
   month.value = m - 1
   // 进入页面：只读磁盘已有日记，不触发 LLM（符合「进入不自动刷新」）
   await loadDiaryOnly()
+  // PRD §4.3：若存在「有 10min 数据但无日记」的天，后台逐个补生成 + 日历 spinner
+  refreshPending().then(() => autoCatchup())
 })
 
 // 问答跳转：监听 window 的 llens_jump 事件，定位到指定日期
@@ -170,6 +206,7 @@ async function loadDiaryOnly() {
     msg.value = String(e)
   } finally {
     dates.value = await invoke<string[]>('list_diary_dates').catch(() => [])
+    refreshPending()
   }
 }
 
@@ -199,19 +236,24 @@ function shiftMonth(delta: number) {
             <div
               v-for="c in days"
               :key="c.day"
-              :class="['cal-day', { out: !c.inMonth, sel: selected === c.day, dot: hasDiary.has(c.day), today: c.day === today() }]"
+              :class="['cal-day', { out: !c.inMonth, sel: selected === c.day, dot: hasDiary.has(c.day), pending: pendingDays.has(c.day), today: c.day === today() }]"
               @click="pickDate(c.day, c.inMonth)"
             >
               {{ c.label }}
               <span v-if="hasDiary.has(c.day)" class="dot-mark" />
+              <span v-else-if="pendingDays.has(c.day)" class="dot-mark pending-mark" />
             </div>
           </div>
         </div>
         <div class="cal-legend">
           <span class="muted"><span class="dot-mark big" /> 已有日记</span>
+          <span class="muted" style="display:inline-flex;align-items:center;gap:4px"><span class="dot-mark big pending-mark" /> 待生成</span>
           <div style="display:flex; gap:8px; align-items:center">
-            <button class="btn" @click="loadDiary" :disabled="busy">刷新</button>
-            <button class="btn primary" @click="forceUpdate" :disabled="busy">更新</button>
+            <button class="btn" @click="loadDiary" :disabled="busy || catchupRunning">刷新</button>
+            <button class="btn primary" @click="forceUpdate" :disabled="busy || catchupRunning">更新</button>
+            <button class="btn" @click="autoCatchup" :disabled="catchupRunning || pendingDays.size === 0">
+              {{ catchupRunning ? '补生成中…' : (pendingDays.size ? `补生成 ${pendingDays.size}` : '补生成') }}
+            </button>
             <label class="min-minutes" title="控制 LLM 生成主要事项时统计的最低任务时长">
               仅 ≥
               <input
@@ -231,6 +273,8 @@ function shiftMonth(delta: number) {
         <div class="diary-head">
           <h3>{{ selected || '…' }} 的日记</h3>
           <span v-if="busy" class="muted">生成中…</span>
+          <span v-else-if="catchupRunning" class="chip" style="background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);color:#fbbf24">补生成中…</span>
+          <span v-else-if="catchupDone && !pendingDays.size" class="chip ok">已补齐待生成日记</span>
           <span v-else-if="msg" class="chip warn">{{ msg }}</span>
         </div>
 
@@ -430,6 +474,10 @@ function shiftMonth(delta: number) {
   height: 8px;
   vertical-align: middle;
   margin-right: 4px;
+}
+/* 待生成标记：琥珀色，区分于已完成的绿色 */
+.dot-mark.pending-mark {
+  background: #fbbf24;
 }
 .cal-legend {
   display: flex;

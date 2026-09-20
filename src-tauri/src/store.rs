@@ -36,6 +36,10 @@ pub struct Config {
     pub recording_enabled: bool,
     /// How many days back to auto-generate diaries (0 = today only, 1 = today + yesterday, etc.)
     pub diary_lookback_days: u32,
+    /// Retention policy (PRD §4.6): 0 = disabled. Screenshots older than this many days are removed.
+    pub retention_image_days: u32,
+    /// JSON logs/summaries older than this many days are removed. 0 = keep forever.
+    pub retention_json_days: u32,
 }
 
 impl Default for Config {
@@ -46,6 +50,8 @@ impl Default for Config {
             model: "agnes-3.0-flash".into(),
             recording_enabled: true,
             diary_lookback_days: 1,
+            retention_image_days: 90,
+            retention_json_days: 365,
         }
     }
 }

@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use serde::Serialize;
 
 /// Global app state: recording flag (polled by the capture loop each tick).
 pub struct AppState {
     pub recording: AtomicBool,
+    /// Last time a retention-based cleanup ran (epoch secs). 0 = never.
+    pub last_cleanup: Mutex<i64>,
 }
 
 #[derive(Serialize)]
@@ -17,6 +20,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             recording: AtomicBool::new(true),
+            last_cleanup: Mutex::new(0),
         }
     }
 

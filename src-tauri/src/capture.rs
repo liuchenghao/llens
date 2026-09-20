@@ -53,12 +53,35 @@ pub async fn run_loop(handle: tauri::AppHandle) {
     let data_root = super::tstate::AppState::data_root();
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(20));
     interval.tick().await;
+    // Auto-cleanup cadence (PRD §4.6): run retention cleanup at most once per 6h.
+    const CLEANUP_INTERVAL_SECS: i64 = 6 * 3600;
     loop {
         let state = handle.state::<super::tstate::AppState>();
         if state.recording.load(std::sync::atomic::Ordering::SeqCst) {
             let cfg = Config::load(&data_root);
             if let Err(e) = capture_once(&cfg, &data_root).await {
                 eprintln!("capture error: {e}");
+            }
+        }
+        // Periodic data cleanup based on configured retention days.
+        let now_ts = chrono::Local::now().timestamp();
+        let due = {
+            let g = state.last_cleanup.lock().unwrap();
+            now_ts.saturating_sub(*g) >= CLEANUP_INTERVAL_SECS
+        };
+        if due {
+            let cfg = Config::load(&data_root);
+            match super::cleanup::run_cleanup(&data_root, &cfg) {
+                Ok(rep) => {
+                    *state.last_cleanup.lock().unwrap() = now_ts;
+                    if rep.removed_images + rep.removed_json > 0 {
+                        eprintln!(
+                            "cleanup: removed {} images, {} json files, freed {} bytes",
+                            rep.removed_images, rep.removed_json, rep.freed_bytes
+                        );
+                    }
+                }
+                Err(e) => eprintln!("cleanup error: {e}"),
             }
         }
         interval.tick().await;

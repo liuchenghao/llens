@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::capture::Frame;
 use crate::diary::Diary;
+use crate::diary::DaySliceCount;
 use crate::qasearch::{self, Plan, ConvTurn, QaAnswer};
 use crate::search::Hit;
 use crate::store::{Config, T10};
@@ -264,6 +265,24 @@ pub async fn regenerate_diaries(
     )
     .await;
     Ok(out)
+}
+
+/// Run a retention-based data cleanup (PRD §4.6). Returns a report of what was
+/// removed so the Settings UI can show the effect. Retention days come from the
+/// current config; a 0 day-count disables that layer.
+#[tauri::command]
+pub fn run_cleanup() -> Result<crate::cleanup::CleanupReport, String> {
+    crate::cleanup::run_cleanup(&root(), &cfg())
+}
+
+/// List days that have 10-min data (within lookback window), each with slice
+/// count and whether a diary file exists. Used by the diary calendar to mark
+/// "待生成" days and by the auto-catchup on page load / date change.
+#[tauri::command]
+pub fn days_with_slices() -> Vec<crate::diary::DaySliceCount> {
+    let cfg = cfg();
+    let up_to = chrono::Local::now().date_naive();
+    crate::diary::days_with_slices(&root(), up_to, cfg.diary_lookback_days)
 }
 
 /// One QA search round (local, no LLM). `limit` 为 0 时用 plan.limit，否则用该值（前端可动态调整）。

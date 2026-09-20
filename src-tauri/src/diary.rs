@@ -1,5 +1,15 @@
 use std::path::PathBuf;
 use chrono::{Local, NaiveDate};
+use super::store::list_t10_range;
+
+/// Day + its 10-min slice count (for calendar badge / auto-catchup).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DaySliceCount {
+    pub date: String,
+    pub slices: usize,
+    /// True if a diary already exists on disk (any status).
+    pub has_diary: bool,
+}
 use serde::{Deserialize, Serialize};
 
 /// Daily diary: second-order summary built from that day's 10-min slices.
@@ -75,6 +85,36 @@ pub fn save(root: &PathBuf, diary: &Diary) -> Result<(), String> {
     std::fs::write(&tmp, s).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Days (within lookback window) that have 10-min data. Each item carries the
+/// slice count and whether a diary file already exists. Oldest-first so the UI
+/// can show "待生成" markers on the calendar and trigger auto-catchup in order.
+pub fn days_with_slices(
+    root: &PathBuf,
+    up_to: NaiveDate,
+    lookback_days: u32,
+) -> Vec<DaySliceCount> {
+    let mut out: Vec<DaySliceCount> = Vec::new();
+    let mut d = up_to;
+    for i in 0..=lookback_days as i64 {
+        let slices = list_t10_range(root, d, d + chrono::Duration::days(1));
+        if !slices.is_empty() {
+            out.push(DaySliceCount {
+                date: d.to_string(),
+                slices: slices.len(),
+                has_diary: load(root, d).is_some(),
+            });
+        }
+        if i == lookback_days as i64 {
+            break;
+        }
+        d = d - chrono::Duration::days(1);
+        if out.len() > 60 {
+            break;
+        }
+    }
+    out
 }
 
 /// A day is "pending" if it has 10-min data and either has no diary, or the

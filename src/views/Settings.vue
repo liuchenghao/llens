@@ -8,6 +8,8 @@ type Cfg = {
   model: string
   recording_enabled: boolean
   diary_lookback_days: number
+  retention_image_days: number
+  retention_json_days: number
 }
 
 const cfg = ref<Cfg>({
@@ -16,6 +18,8 @@ const cfg = ref<Cfg>({
   model: '',
   recording_enabled: true,
   diary_lookback_days: 1,
+  retention_image_days: 90,
+  retention_json_days: 365,
 })
 const saved = ref(false)
 const err = ref('')
@@ -75,6 +79,25 @@ async function resetDataRoot() {
     rootBusy.value = false
   }
 }
+
+// PRD §4.6 数据清理：按保留天数立即清理一次，显示效果。
+const cleanBusy = ref(false)
+const cleanMsg = ref('')
+async function runCleanupNow() {
+  cleanBusy.value = true
+  cleanMsg.value = ''
+  try {
+    const rep = await invoke<{ removed_images: number; removed_json: number; freed_bytes: number }>(
+      'run_cleanup',
+    )
+    const mb = (rep.freed_bytes / 1024 / 1024).toFixed(2)
+    cleanMsg.value = `已清理 ${rep.removed_images} 张图片、${rep.removed_json} 个 JSON，释放 ${mb} MB`
+  } catch (e: any) {
+    cleanMsg.value = `清理失败：${String(e).slice(0, 80)}`
+  } finally {
+    cleanBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -99,6 +122,35 @@ async function resetDataRoot() {
         style="max-width: 80px; display: inline-block"
       />
       <div class="muted" style="font-size:11px; margin-top:2px">影响日记页打开时自动补跑的范围</div>
+
+      <div class="glass" style="border-radius:12px; padding:12px 14px; margin-top:14px">
+        <h3 style="margin:0 0 6px">数据保留（PRD §4.6）</h3>
+        <label style="margin:8px 0 4px">图片保留天数（0=永久保留）</label>
+        <input
+          v-model.number="cfg.retention_image_days"
+          type="number"
+          min="0"
+          max="3650"
+          style="max-width: 80px; display: inline-block"
+        />
+        <label style="margin:8px 0 4px; display:block">JSON 日志保留天数（0=永久保留）</label>
+        <input
+          v-model.number="cfg.retention_json_days"
+          type="number"
+          min="0"
+          max="3650"
+          style="max-width: 80px; display: inline-block"
+        />
+        <div class="muted" style="font-size:11px; margin-top:6px; line-height:1.5">
+          采集循环每 6 小时自动清理一次超期数据；也可手动立即清理。
+        </div>
+        <div style="margin-top:10px; display:flex; gap:10px; align-items:center">
+          <button class="btn" :disabled="cleanBusy" @click="runCleanupNow">
+            {{ cleanBusy ? '清理中…' : '立即清理' }}
+          </button>
+          <span v-if="cleanMsg" class="muted" style="font-size:12px">{{ cleanMsg }}</span>
+        </div>
+      </div>
 
       <div style="margin-top: 16px; display:flex; gap:10px; align-items:center">
         <button class="btn primary" @click="save">保存 LLM 设置</button>
