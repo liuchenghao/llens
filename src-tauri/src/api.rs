@@ -6,7 +6,6 @@ use serde::Serialize;
 
 use crate::capture::Frame;
 use crate::diary::Diary;
-use crate::diary::DaySliceCount;
 use crate::qasearch::{self, Plan, ConvTurn, QaAnswer};
 use crate::search::Hit;
 use crate::store::{Config, T10};

@@ -214,9 +214,9 @@ pub async fn retry_frame(cfg: &Config, data_root: &PathBuf, frame: &Frame) -> Re
     let image = frame.image.trim();
     let preview = frame.preview.trim();
     let main_src: std::path::PathBuf;
-    if (!image.is_empty() && data_root.join(image).exists()) {
+    if !image.is_empty() && data_root.join(image).exists() {
         main_src = data_root.join(image);
-    } else if (!preview.is_empty() && data_root.join(preview).exists()) {
+    } else if !preview.is_empty() && data_root.join(preview).exists() {
         main_src = data_root.join(preview);
     } else {
         return Err(format!(
