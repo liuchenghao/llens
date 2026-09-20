@@ -420,174 +420,263 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         return Ok(frame);
     }
 
-    /// Capture one display. display 1 is always the main display.
-    fn capture_display(shot_dir: &PathBuf, stem: &str, display: u32) -> Option<std::path::PathBuf> {
-        let fname = if display == 1 {
-            format!("{stem}.png")
-        } else {
-            format!("{stem}_d{display}.png")
-        };
-        let path = shot_dir.join(&fname);
-        let out = std::process::Command::new("screencapture")
-            .arg("-x")
-            .arg("-D")
-            .arg(display.to_string())
-            .arg(&path)
+    #[cfg(target_os = "windows")]
+    {
+        // ---- Windows: 单屏截屏，通过 PowerShell + System.Drawing 完成（Windows 10/11 自带 powershell.exe，无外部依赖）----
+        // 抓取主屏 PrimaryMonitorBounds，保存为 PNG 后删原图，保留压缩 JPEG 预览供 LLM 使用。
+        let shot_path = shot_dir.join(format!("{base_stem}.png"));
+        let shot_str = shot_path.to_string_lossy().to_string();
+        // Windows 路径中的反斜杠在 PowerShell 字符串里无需转义；
+        // 仅处理可能出现的双引号。
+        // 双引号转义（Windows 路径里极少出现，但保险起见处理）
+        let shot_arg = shot_str.replace('"', "\\\"");
+        // 各条 PowerShell 语句以分号连接成单行命令，避免换行符转义问题
+        let ps_cmd = format!(
+            "Add-Type -AssemblyName System.Drawing; $b=[System.Drawing.SystemInformation]::PrimaryMonitorBounds; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save('{shot_arg}',[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose();",
+        );
+        let out = std::process::Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(&ps_cmd)
             .output()
-            .ok()?;
-        if out.status.success() && path.exists() {
-            Some(path)
-        } else {
-            let _ = std::fs::remove_file(&path);
-            None
+            .map_err(|e| format!("spawn powershell: {e}"))?;
+        if !out.status.success() || !shot_path.exists() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("powershell screenshot failed: {stderr}"));
         }
+
+        let month = now.format("%Y-%m").to_string();
+        let preview_rel = format!("screenshots/{month}/{base_stem}.jpg");
+        let preview_path = shot_dir.join(format!("{base_stem}.jpg"));
+        let preview_ok = make_preview(&shot_path, &preview_path).is_ok();
+
+        let _ = std::fs::remove_file(&shot_path);
+
+        let data_src = if preview_ok {
+            vec![preview_path.clone()]
+        } else {
+            return Err("Windows: 截图预览生成失败，无法调用 LLM".into());
+        };
+
+        let data_urls = futures_join_paths(&data_src).await?;
+        let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        let parsed = llm_summarize(cfg, &data_urls, 1, &time_str).await;
+
+        let frame = Frame {
+            time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+            image: String::new(),
+            extra_images: Vec::new(),
+            thumb: if preview_ok { preview_rel.clone() } else { String::new() },
+            preview: if preview_ok { preview_rel.clone() } else { String::new() },
+            extra_thumbs: Vec::new(),
+            extra_previews: Vec::new(),
+            summary5: parsed["summary5"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.trim().to_string())
+                        .take(5)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            activity: parsed["activity"].as_str().map(|s| s.to_string()),
+            app: parsed["app"].as_str().map(|s| s.to_string()),
+            project: parsed["project"].as_str().map(|s| s.to_string()),
+            rest: false,
+        };
+
+        append_hour_frame(data_root, &now, &frame);
+
+        let bucket = (now.timestamp() / 600) * 600;
+        let sfile = super::store::sum_file_for(data_root, &now, bucket);
+        if !sfile.exists() {
+            let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
+            let cfg_clone = cfg.clone();
+            let root_clone = data_root.clone();
+            tokio::spawn(async move {
+                let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3, 30).await;
+            });
+        }
+
+        return Ok(frame);
     }
 
-    // 1) Capture every connected display (1 = main; try up to 4 total).
-    // Multi-monitor: the user works across screens, so each display is
-    // captured into its own file and all images go to the LLM together.
-    let main_path = match capture_display(&shot_dir, &base_stem, 1) {
-        Some(p) => p,
-        None => {
-            // Fall back: -D 1 can fail on some systems; try bare -x.
-            let p = shot_dir.join(format!("{base_stem}.png"));
+    #[cfg(target_os = "macos")]
+    {
+        /// Capture one display. display 1 is always the main display.
+        fn capture_display(shot_dir: &PathBuf, stem: &str, display: u32) -> Option<std::path::PathBuf> {
+            let fname = if display == 1 {
+                format!("{stem}.png")
+            } else {
+                format!("{stem}_d{display}.png")
+            };
+            let path = shot_dir.join(&fname);
             let out = std::process::Command::new("screencapture")
                 .arg("-x")
-                .arg(&p)
+                .arg("-D")
+                .arg(display.to_string())
+                .arg(&path)
                 .output()
-                .map_err(|e| format!("spawn screencapture: {e}"))?;
-            if !out.status.success() || !p.exists() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                return Err(format!(
-                    "screencapture failed (screen-recording permission?): {stderr}"
-                ));
+                .ok()?;
+            if out.status.success() && path.exists() {
+                Some(path)
+            } else {
+                let _ = std::fs::remove_file(&path);
+                None
             }
-            p
         }
-    };
-    let mut extra_paths: Vec<std::path::PathBuf> = Vec::new();
-    for d in 2..=4u32 {
-        match capture_display(&shot_dir, &base_stem, d) {
-            Some(p) => extra_paths.push(p),
-            None => break, // displays are numbered sequentially; stop at the first gap
+
+        // 1) Capture every connected display (1 = main; try up to 4 total).
+        // Multi-monitor: the user works across screens, so each display is
+        // captured into its own file and all images go to the LLM together.
+        let main_path = match capture_display(&shot_dir, &base_stem, 1) {
+            Some(p) => p,
+            None => {
+                // Fall back: -D 1 can fail on some systems; try bare -x.
+                let p = shot_dir.join(format!("{base_stem}.png"));
+                let out = std::process::Command::new("screencapture")
+                    .arg("-x")
+                    .arg(&p)
+                    .output()
+                    .map_err(|e| format!("spawn screencapture: {e}"))?;
+                if !out.status.success() || !p.exists() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    return Err(format!(
+                        "screencapture failed (screen-recording permission?): {stderr}"
+                    ));
+                }
+                p
+            }
+        };
+        let mut extra_paths: Vec<std::path::PathBuf> = Vec::new();
+        for d in 2..=4u32 {
+            match capture_display(&shot_dir, &base_stem, d) {
+                Some(p) => extra_paths.push(p),
+                None => break, // displays are numbered sequentially; stop at the first gap
+            }
         }
-    }
 
-    // 2) Generate per-display preview JPEGs (≤2048px, <1MB) → kept on disk.
-    //    Main: {stem}.jpg ; Extra: {stem}_d{N}.jpg
-    let month = now.format("%Y-%m").to_string();
-    let main_preview = shot_dir.join(format!("{base_stem}.jpg"));
-    let main_preview_rel = format!("screenshots/{month}/{base_stem}.jpg");
-    let main_preview_ok = make_preview(&main_path, &main_preview).is_ok();
-    let mut extra_preview_paths: Vec<std::path::PathBuf> = Vec::new();
-    let mut extra_preview_rels: Vec<String> = Vec::new();
-    for ep in extra_paths.iter() {
-        let stem_extra = ep
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default()
-            .trim_end_matches(".png")
-            .to_string();
-        let p_path = shot_dir.join(format!("{stem_extra}.jpg"));
-        if make_preview(ep, &p_path).is_ok() {
-            extra_preview_paths.push(p_path.clone());
-            extra_preview_rels.push(format!("screenshots/{month}/{stem_extra}.jpg"));
-        }
-    }
-
-    // 3) Compose a single timeline thumbnail from all per-display previews.
-    //    Main preview (if available) + all extra previews → one horizontal row.
-    let thumb_path = shot_dir.join(format!("{base_stem}_t.jpg"));
-    let thumb_rel = format!("screenshots/{month}/{base_stem}_t.jpg");
-    let mut display_imgs: Vec<std::path::PathBuf> = Vec::new();
-    if main_preview_ok && main_preview.exists() {
-        display_imgs.push(main_preview.clone());
-    } else {
-        // fall back to the raw main PNG if preview generation failed
-        display_imgs.push(main_path.clone());
-    }
-    display_imgs.extend(extra_preview_paths.iter().cloned());
-    let thumb = match compose_displays_thumb(&display_imgs, &thumb_path) {
-        Ok(_path) => thumb_rel,
-        Err(e) => {
-            eprintln!("thumbnail composition failed: {e}");
-            String::new()
-        }
-    };
-
-    // 4) Delete the original full-size PNGs (LLM consumed them, previews written).
-    let mut originals_to_delete: Vec<std::path::PathBuf> = vec![main_path.clone()];
-    for ep in extra_paths.iter() {
-        originals_to_delete.push(ep.clone());
-    }
-    for p in &originals_to_delete {
-        let _ = std::fs::remove_file(p);
-    }
-
-    // 5) Run LLM summarization on the compressed preview JPEGs (same quality
-    //    as before, but read from the kept-on-disk previews instead of the
-    //    already-deleted original PNGs).
-    let all_paths: Vec<std::path::PathBuf> = {
-        let mut v = Vec::new();
-        if main_preview_ok {
-            v.push(main_preview.clone());
-        } else {
-            return Err("main preview generation failed; cannot summarize frame".into());
-        }
-        v.extend(extra_preview_paths.clone());
-        v
-    };
-    let data_urls = futures_join_paths(&all_paths).await?;
-    let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
-    let parsed = llm_summarize(cfg, &data_urls, all_paths.len(), &time_str).await;
-
-    let frame = Frame {
-        time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
-        image: format!("screenshots/{month}/{base_stem}.png"),
-        extra_images: extra_paths
-            .iter()
-            .map(|p| p
+        // 2) Generate per-display preview JPEGs (≤2048px, <1MB) → kept on disk.
+        //    Main: {stem}.jpg ; Extra: {stem}_d{N}.jpg
+        let month = now.format("%Y-%m").to_string();
+        let main_preview = shot_dir.join(format!("{base_stem}.jpg"));
+        let main_preview_rel = format!("screenshots/{month}/{base_stem}.jpg");
+        let main_preview_ok = make_preview(&main_path, &main_preview).is_ok();
+        let mut extra_preview_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut extra_preview_rels: Vec<String> = Vec::new();
+        for ep in extra_paths.iter() {
+            let stem_extra = ep
                 .file_name()
-                .map(|n| format!("screenshots/{month}/{}", n.to_string_lossy()))
-                .unwrap_or_default())
-            .collect(),
-        thumb,
-        preview: if main_preview_ok { main_preview_rel.clone() } else { String::new() },
-        extra_thumbs: Vec::new(),
-        extra_previews: extra_preview_rels,
-        summary5: parsed["summary5"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str())
-                    .map(|s| s.trim().to_string())
-                    .take(5)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        activity: parsed["activity"].as_str().map(|s| s.to_string()),
-        app: parsed["app"].as_str().map(|s| s.to_string()),
-        project: parsed["project"].as_str().map(|s| s.to_string()),
-        rest: false,
-    };
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+                .trim_end_matches(".png")
+                .to_string();
+            let p_path = shot_dir.join(format!("{stem_extra}.jpg"));
+            if make_preview(ep, &p_path).is_ok() {
+                extra_preview_paths.push(p_path.clone());
+                extra_preview_rels.push(format!("screenshots/{month}/{stem_extra}.jpg"));
+            }
+        }
 
-    // 6) Append to hour log.
-    append_hour_frame(data_root, &now, &frame);
+        // 3) Compose a single timeline thumbnail from all per-display previews.
+        //    Main preview (if available) + all extra previews → one horizontal row.
+        let thumb_path = shot_dir.join(format!("{base_stem}_t.jpg"));
+        let thumb_rel = format!("screenshots/{month}/{base_stem}_t.jpg");
+        let mut display_imgs: Vec<std::path::PathBuf> = Vec::new();
+        if main_preview_ok && main_preview.exists() {
+            display_imgs.push(main_preview.clone());
+        } else {
+            // fall back to the raw main PNG if preview generation failed
+            display_imgs.push(main_path.clone());
+        }
+        display_imgs.extend(extra_preview_paths.iter().cloned());
+        let thumb = match compose_displays_thumb(&display_imgs, &thumb_path) {
+            Ok(_path) => thumb_rel,
+            Err(e) => {
+                eprintln!("thumbnail composition failed: {e}");
+                String::new()
+            }
+        };
 
-    // 7) 10-min boundary check: when the 10-minute slice ends, write the
-    //    summary and trigger diary regeneration in the background.
-    let bucket = (now.timestamp() / 600) * 600;
-    let sfile = super::store::sum_file_for(data_root, &now, bucket);
-    if !sfile.exists() {
-        let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
-        let cfg_clone = cfg.clone();
-        let root_clone = data_root.clone();
-        tokio::spawn(async move {
-            let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3, 30).await;
-        });
+        // 4) Delete the original full-size PNGs (LLM consumed them, previews written).
+        let mut originals_to_delete: Vec<std::path::PathBuf> = vec![main_path.clone()];
+        for ep in extra_paths.iter() {
+            originals_to_delete.push(ep.clone());
+        }
+        for p in &originals_to_delete {
+            let _ = std::fs::remove_file(p);
+        }
+
+        // 5) Run LLM summarization on the compressed preview JPEGs (same quality
+        //    as before, but read from the kept-on-disk previews instead of the
+        //    already-deleted original PNGs).
+        let all_paths: Vec<std::path::PathBuf> = {
+            let mut v = Vec::new();
+            if main_preview_ok {
+                v.push(main_preview.clone());
+            } else {
+                return Err("main preview generation failed; cannot summarize frame".into());
+            }
+            v.extend(extra_preview_paths.clone());
+            v
+        };
+        let data_urls = futures_join_paths(&all_paths).await?;
+        let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        let parsed = llm_summarize(cfg, &data_urls, all_paths.len(), &time_str).await;
+
+        let frame = Frame {
+            time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+            image: format!("screenshots/{month}/{base_stem}.png"),
+            extra_images: extra_paths
+                .iter()
+                .map(|p| p
+                    .file_name()
+                    .map(|n| format!("screenshots/{month}/{}", n.to_string_lossy()))
+                    .unwrap_or_default())
+                .collect(),
+            thumb,
+            preview: if main_preview_ok { main_preview_rel.clone() } else { String::new() },
+            extra_thumbs: Vec::new(),
+            extra_previews: extra_preview_rels,
+            summary5: parsed["summary5"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.trim().to_string())
+                        .take(5)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            activity: parsed["activity"].as_str().map(|s| s.to_string()),
+            app: parsed["app"].as_str().map(|s| s.to_string()),
+            project: parsed["project"].as_str().map(|s| s.to_string()),
+            rest: false,
+        };
+
+        // 6) Append to hour log.
+        append_hour_frame(data_root, &now, &frame);
+
+        // 7) 10-min boundary check: when the 10-minute slice ends, write the
+        //    summary and trigger diary regeneration in the background.
+        let bucket = (now.timestamp() / 600) * 600;
+        let sfile = super::store::sum_file_for(data_root, &now, bucket);
+        if !sfile.exists() {
+            let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
+            let cfg_clone = cfg.clone();
+            let root_clone = data_root.clone();
+            tokio::spawn(async move {
+                let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3, 30).await;
+            });
+        }
+
+        return Ok(frame);
     }
 
-    Ok(frame)
+    // 不应到达：macOS / Linux / Windows 各自分支已 return
+    unreachable!("capture_once: no platform branch executed")
 }
 
 /// Append a frame to its hour log file (creating it if needed).
