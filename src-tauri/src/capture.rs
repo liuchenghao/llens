@@ -100,6 +100,7 @@ async fn compress_to_data_url(p: &std::path::Path) -> Result<String, String> {
 /// Stitch the per-display preview JPEGs horizontally into a single composed
 /// timeline thumbnail. All displays are resized to a common height (66px),
 /// concatenated side-by-side, and encoded as JPEG <100KB.
+#[allow(dead_code)] // 非 macOS 平台（Linux/Windows 单屏）不使用此函数
 fn compose_displays_thumb(
     display_paths: &[std::path::PathBuf],
     out_path: &std::path::Path,
@@ -430,13 +431,38 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         // 仅处理可能出现的双引号。
         // 双引号转义（Windows 路径里极少出现，但保险起见处理）
         let shot_arg = shot_str.replace('"', "\\\"");
-        // 各条 PowerShell 语句以分号连接成单行命令，避免换行符转义问题
+        // 用 Add-Type 内联 C# 调 Win32 + GDI 抓主屏，比 SystemInformation 更稳
+        // （部分精简版 Windows / PowerShell 受限语言模式下 SystemInformation 不可用）。
+        // 通过 GetSystemMetrics 拿主屏尺寸，用 System.Drawing.Bitmap.FromScreen 抓取。
+        let cs_code = r#"
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+public class LLensCapture {
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+    public static void Capture(string path) {
+        int w = GetSystemMetrics(0);   // SM_CXSCREEN: 主屏宽
+        int h = GetSystemMetrics(1);   // SM_CYSCREEN: 主屏高
+        using (Bitmap bmp = new Bitmap(w, h)) {
+            using (Graphics g = Graphics.FromImage(bmp)) {
+                g.CopyFromScreen(0, 0, 0, new System.Drawing.Size(w, h), System.Drawing.CopyPixelOperation.SourceCopy);
+                bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+    }
+}
+"#;
+        // 原始 C# 里 \r\n 在 raw string 中是字面两个字符，保持原样即可，
+        // 直接交给 Add-Type（PowerShell 里 -TypeDefinition 接多行字符串）
+        let cs_code_arg = cs_code.to_string();
+        // PowerShell: Add-Type 定义类型，再调用 Capture(path)
         let ps_cmd = format!(
-            "Add-Type -AssemblyName System.Drawing; $b=[System.Drawing.SystemInformation]::PrimaryMonitorBounds; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save('{shot_arg}',[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose();",
+            "Add-Type -Language CSharp -TypeDefinition '{cs_code_arg}' -ReferencedAssemblies System.Drawing; [LLensCapture]::Capture('{shot_arg}')",
         );
         let out = std::process::Command::new("powershell")
             .arg("-NoProfile")
             .arg("-NonInteractive")
+            .arg("-STA")
             .arg("-Command")
             .arg(&ps_cmd)
             .output()
@@ -674,9 +700,6 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
 
         return Ok(frame);
     }
-
-    // 不应到达：macOS / Linux / Windows 各自分支已 return
-    unreachable!("capture_once: no platform branch executed")
 }
 
 /// Append a frame to its hour log file (creating it if needed).
