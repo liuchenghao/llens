@@ -16,6 +16,7 @@ pub mod api;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // autostart 插件：macOS 走 LaunchAgent，Linux 走 XDG（自动）
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,

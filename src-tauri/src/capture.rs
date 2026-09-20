@@ -23,7 +23,7 @@ pub struct Frame {
     /// extra display thumbnails, parallel to `extra_images`
     #[serde(default)]
     pub extra_thumbs: Vec<String>,
-    /// extra display preview images, parallel to `extra_images`
+    /// extra display preview images, parallel to `extra_previews`
     #[serde(default)]
     pub extra_previews: Vec<String>,
     /// exactly 5 short sentences from the model (empty if pending/failed)
@@ -151,11 +151,12 @@ fn compose_displays_thumb(
 
 /// Build the frame-summarization prompt.
 fn frame_prompt(n_displays: usize, time_str: &str) -> String {
+    let os_name = if cfg!(target_os = "macos") { "macOS" } else if cfg!(target_os = "linux") { "Linux" } else { "Windows" };
     let display_note = if n_displays == 1 {
-        "这是用户 macOS 的屏幕截图（1 块屏幕）。".to_string()
+        format!("这是用户 {os_name} 的屏幕截图（1 块屏幕）。")
     } else {
         format!(
-            "这是用户 macOS 多显示器在同一时刻的 {n_displays} 张截图（按显示器 1..{n_displays} 排列，第 1 张是主屏）。请综合所有屏幕理解用户当前活动。"
+            "这是用户 {os_name} 多显示器在同一时刻的 {n_displays} 张截图（按显示器 1..{n_displays} 排列，第 1 张是主屏）。请综合所有屏幕理解用户当前活动。"
         )
     };
     format!(
@@ -347,6 +348,78 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         return Ok(rest_frame);
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        // ---- Linux: single screen via scrot (Wayland 需要 maim/sway 等，当前按 X11/Xorg 设计) ----
+        let shot_path = shot_dir.join(format!("{base_stem}.png"));
+        let out = std::process::Command::new("scrot")
+            .arg(&shot_path)
+            .output()
+            .map_err(|e| format!("spawn scrot: {e} (请确认已安装 scrot)"))?;
+        if !out.status.success() || !shot_path.exists() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("scrot failed (X11 环境缺失?): {stderr}"));
+        }
+
+        let month = now.format("%Y-%m").to_string();
+        let preview_rel = format!("screenshots/{month}/{base_stem}.jpg");
+        let preview_path = shot_dir.join(format!("{base_stem}.jpg"));
+        let preview_ok = make_preview(&shot_path, &preview_path).is_ok();
+
+        // 删除原图，保留预览 JPEG
+        let _ = std::fs::remove_file(&shot_path);
+
+        let data_src = if preview_ok {
+            vec![preview_path.clone()]
+        } else {
+            return Err("Linux: 截图预览生成失败，无法调用 LLM".into());
+        };
+
+        let data_urls = futures_join_paths(&data_src).await?;
+        let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        let parsed = llm_summarize(cfg, &data_urls, 1, &time_str).await;
+
+        let frame = Frame {
+            time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+            image: String::new(), // Linux 端原图已删，直接存空，preview 为准
+            extra_images: Vec::new(),
+            thumb: if preview_ok { preview_rel.clone() } else { String::new() },
+            preview: if preview_ok { preview_rel.clone() } else { String::new() },
+            extra_thumbs: Vec::new(),
+            extra_previews: Vec::new(),
+            summary5: parsed["summary5"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.trim().to_string())
+                        .take(5)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            activity: parsed["activity"].as_str().map(|s| s.to_string()),
+            app: parsed["app"].as_str().map(|s| s.to_string()),
+            project: parsed["project"].as_str().map(|s| s.to_string()),
+            rest: false,
+        };
+
+        append_hour_frame(data_root, &now, &frame);
+
+        // 10min boundary check
+        let bucket = (now.timestamp() / 600) * 600;
+        let sfile = super::store::sum_file_for(data_root, &now, bucket);
+        if !sfile.exists() {
+            let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
+            let cfg_clone = cfg.clone();
+            let root_clone = data_root.clone();
+            tokio::spawn(async move {
+                let _ = super::diary::regenerate_pending(&root_clone, &cfg_clone, 3, 30).await;
+            });
+        }
+
+        return Ok(frame);
+    }
+
     /// Capture one display. display 1 is always the main display.
     fn capture_display(shot_dir: &PathBuf, stem: &str, display: u32) -> Option<std::path::PathBuf> {
         let fname = if display == 1 {
@@ -468,47 +541,45 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
     let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
     let parsed = llm_summarize(cfg, &data_urls, all_paths.len(), &time_str).await;
 
-    let summary5: Vec<String> = parsed["summary5"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str())
-                .map(|s| s.trim().to_string())
-                .take(5)
-                .collect()
-        })
-        .unwrap_or_default();
-    let activity = parsed["activity"].as_str().map(|s| s.to_string());
-    let app = parsed["app"].as_str().map(|s| s.to_string());
-    let project = parsed["project"].as_str().map(|s| s.to_string());
-
     let frame = Frame {
         time: now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
-        image: String::new(),
-        extra_images: Vec::new(),
+        image: format!("screenshots/{month}/{base_stem}.png"),
+        extra_images: extra_paths
+            .iter()
+            .map(|p| p
+                .file_name()
+                .map(|n| format!("screenshots/{month}/{}", n.to_string_lossy()))
+                .unwrap_or_default())
+            .collect(),
         thumb,
-        preview: if main_preview_ok { main_preview_rel } else { String::new() },
+        preview: if main_preview_ok { main_preview_rel.clone() } else { String::new() },
         extra_thumbs: Vec::new(),
         extra_previews: extra_preview_rels,
-        summary5,
-        activity,
-        app,
-        project,
+        summary5: parsed["summary5"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(|s| s.trim().to_string())
+                    .take(5)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        activity: parsed["activity"].as_str().map(|s| s.to_string()),
+        app: parsed["app"].as_str().map(|s| s.to_string()),
+        project: parsed["project"].as_str().map(|s| s.to_string()),
         rest: false,
     };
 
-    // 6) append to current-hour JSON atomically
+    // 6) Append to hour log.
     append_hour_frame(data_root, &now, &frame);
 
-    // 7) maybe trigger a 10-min summary when crossing a boundary
+    // 7) 10-min boundary check: when the 10-minute slice ends, write the
+    //    summary and trigger diary regeneration in the background.
     let bucket = (now.timestamp() / 600) * 600;
     let sfile = super::store::sum_file_for(data_root, &now, bucket);
     if !sfile.exists() {
         let _ = super::store::write_10min_summary(data_root, &now, cfg).await;
-        // Auto-regenerate stale diaries in the background so the diary view
-        // updates without the user having to click refresh. The check is
-        // cheap: it only re-runs the LLM for days whose 10-min slice count
-        // has grown since the last diary generation.
         let cfg_clone = cfg.clone();
         let root_clone = data_root.clone();
         tokio::spawn(async move {
@@ -519,102 +590,84 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
     Ok(frame)
 }
 
-/// Append a frame into the hour JSON file (atomic rewrite via tmp+rename).
-pub fn append_hour_frame(
-    data_root: &PathBuf,
-    now: &chrono::DateTime<chrono::Local>,
-    frame: &Frame,
-) {
+/// Append a frame to its hour log file (creating it if needed).
+fn append_hour_frame(data_root: &PathBuf, now: &chrono::DateTime<chrono::Local>, frame: &Frame) {
+    let day = now.format("%Y-%m-%d").to_string();
     let hour_key = now.format("%Y-%m-%d %H:00").to_string();
     let month = now.format("%Y-%m").to_string();
-    let hour_dir = data_root.join("logs").join(&month);
-    let _ = std::fs::create_dir_all(&hour_dir);
-    let hfile = hour_dir
-        .join(now.format("%Y-%m-%d_%H").to_string())
+    let log_dir = data_root.join("logs").join(month);
+    let _ = std::fs::create_dir_all(&log_dir);
+    let p = log_dir
+        .join(format!("{day}_{:02}", now.format("%H").to_string().parse::<u32>().unwrap_or(0)))
         .with_extension("json");
-    let mut hf = read_hour_file(&hfile, &hour_key);
+
+    let mut hf: HourFile = if p.exists() {
+        std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| HourFile { hour: hour_key.clone(), frames: Vec::new() })
+    } else {
+        HourFile { hour: hour_key, frames: Vec::new() }
+    };
     hf.frames.push(frame.clone());
-    write_hour_file(&hfile, &hf);
+    write_hour_file(&p, &hf);
 }
 
-/// Compress a raw screenshot (PNG/JPEG) to JPEG ≤1280px wide, q=70, via macOS `sips`.
-/// Returns (jpeg_bytes, data_url). The original file on disk is untouched.
-async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
-    // write raw to a temp file, sips -> jpeg
-    let tmp_in = std::env::temp_dir().join(format!("llens_raw_{}.bin", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp_in, raw).map_err(|e| format!("write tmp: {e}"))?;
-    let tmp_out = tmp_in.with_extension("jpg");
-    let sips = std::process::Command::new("sips")
-        .args(["-Z", "1280", "-s", "format", "jpeg", "-s", "formatOptions", "70"])
-        .arg(&tmp_in)
-        .arg("--out")
-        .arg(&tmp_out)
-        .output();
-    let _ = std::fs::remove_file(&tmp_in);
-    let sips = sips.map_err(|e| format!("sips spawn: {e}"))?;
-    if !sips.status.success() {
-        let stderr = String::from_utf8_lossy(&sips.stderr);
-        eprintln!("sips failed, falling back to raw: {stderr}");
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            raw,
-        );
-        return Ok((raw.to_vec(), format!("data:image/png;base64,{b64}")));
-    }
-    let jpeg = std::fs::read(&tmp_out).map_err(|e| format!("read sips out: {e}"))?;
-    let _ = std::fs::remove_file(&tmp_out);
-    let b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &jpeg,
-    );
-    Ok((jpeg, format!("data:image/jpeg;base64,{b64}")))
-}
-
-/// Create a large preview JPEG (≤2048px wide) from a source image on disk,
-/// targeting <1MB. Tries quality 85 → 75 → 60 → 45 until under 1MB.
-fn make_preview(src: &std::path::Path, out_path: &std::path::Path) -> Result<(), String> {
-    const TARGET: u64 = 1_000_000; // 1MB
-    for q in ["85", "75", "60", "45"] {
-        let sips = std::process::Command::new("sips")
-            .args(["-Z", "2048", "-s", "format", "jpeg", "-s", "formatOptions", q])
-            .arg(src)
-            .arg("--out")
-            .arg(out_path)
-            .output()
-            .map_err(|e| format!("sips preview spawn: {e}"))?;
-        if !sips.status.success() {
-            let stderr = String::from_utf8_lossy(&sips.stderr);
-            return Err(format!("sips preview failed: {stderr}"));
-        }
-        if out_path.metadata().map(|m| m.len() < TARGET).unwrap_or(false) {
-            return Ok(());
-        }
-        // too big, try lower quality
-    }
-    // 45 still over 1MB (rare, e.g. very complex screen) — accept it anyway
-    Ok(())
-}
-
-fn read_hour_file(p: &PathBuf, hour_key: &str) -> HourFile {
-    match std::fs::read_to_string(p) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or(HourFile {
-            hour: hour_key.into(),
-            frames: vec![],
-        }),
-        Err(_) => HourFile {
-            hour: hour_key.into(),
-            frames: vec![],
-        },
-    }
-}
-
-fn write_hour_file(p: &PathBuf, hf: &HourFile) {
+fn write_hour_file(p: &std::path::Path, hf: &HourFile) {
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let s = serde_json::to_string_pretty(hf).unwrap_or_default();
-    let tmp = p.with_extension("json.tmp");
-    if std::fs::write(&tmp, s).is_ok() {
-        let _ = std::fs::rename(&tmp, p);
+    if let Ok(json) = serde_json::to_string_pretty(hf) {
+        let _ = std::fs::write(p, json);
     }
+}
+
+/// Compress a source image into a preview JPEG (≤2048px wide, <1MB on disk).
+fn make_preview(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    let img = image::open(src).map_err(|e| format!("open src: {e}"))?;
+    let w = img.width();
+    let h = img.height();
+    let max_w: u32 = 2048;
+    let resized = if w > max_w {
+        img.resize(max_w, h * max_w / w, FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let rgb = resized.to_rgb8();
+    let (rw, rh) = (rgb.width(), rgb.height());
+    let rgb_buf: Vec<u8> = rgb.into_raw();
+    for q in [90u8, 80, 70, 60] {
+        let mut buf: Vec<u8> = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, q);
+        encoder
+            .write_image(&rgb_buf, rw, rh, image::ExtendedColorType::Rgb8)
+            .map_err(|e| format!("preview encode: {e}"))?;
+        if buf.len() <= 1_000_000 || q == 60 {
+            std::fs::write(dst, &buf).map_err(|e| format!("write preview: {e}"))?;
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// Compress raw screenshot bytes to JPEG for LLM payload (≤1280px, q70).
+async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
+    let img = image::load_from_memory(raw).map_err(|e| format!("decode: {e}"))?;
+    let w = img.width();
+    let h = img.height();
+    let max_w: u32 = 1280;
+    let resized = if w > max_w {
+        img.resize(max_w, h * max_w / w, FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let rgb = resized.to_rgb8();
+    let (rw, rh) = (rgb.width(), rgb.height());
+    let rgb_buf: Vec<u8> = rgb.into_raw();
+    let mut buf: Vec<u8> = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 70)
+        .write_image(&rgb_buf, rw, rh, image::ExtendedColorType::Rgb8)
+        .map_err(|e| format!("jpeg encode: {e}"))?;
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf);
+    Ok((buf, format!("data:image/jpeg;base64,{b64}")))
 }
