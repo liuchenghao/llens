@@ -117,29 +117,67 @@ async function runCleanupNow() {
 <template>
   <div>
     <h1 class="page">设置</h1>
-    <div class="glass card" style="max-width: 560px">
-      <label>API Base URL</label>
-      <input v-model="cfg.base_url" placeholder="https://apihub.agnes-ai.com/v1" />
-      <label>模型</label>
-      <input v-model="cfg.model" placeholder="agnes-3.0-flash" />
-      <label>API Key（保存在本地 config.json）</label>
-      <input v-model="cfg.api_key" type="password" />
-      <label style="display:flex; align-items:center; gap:8px">
-        <input type="checkbox" v-model="cfg.recording_enabled" style="width:auto" /> 允许后台截屏
-      </label>
-      <label>日记自动回溯天数（0=仅今天，1=今天+昨天，以此类推）</label>
-      <input
-        v-model.number="cfg.diary_lookback_days"
-        type="number"
-        min="0"
-        max="30"
-        style="max-width: 80px; display: inline-block"
-      />
-      <div class="muted" style="font-size:11px; margin-top:2px">影响日记页打开时自动补跑的范围</div>
+    <div class="grid">
+      <!-- 左列 -->
+      <div class="glass card">
+        <h3>LLM 设置</h3>
+        <label>API Base URL</label>
+        <input v-model="cfg.base_url" placeholder="https://apihub.agnes-ai.com/v1" />
+        <label>模型</label>
+        <input v-model="cfg.model" placeholder="agnes-3.0-flash" />
+        <label>API Key（保存在本地 config.json）</label>
+        <input v-model="cfg.api_key" type="password" />
+        <div style="margin-top: 14px; display:flex; gap:10px; align-items:center">
+          <button class="btn primary" @click="save">保存</button>
+          <span v-if="saved" class="muted">已保存</span>
+          <span v-if="err" class="chip warn">{{ err }}</span>
+        </div>
+      </div>
 
-      <div class="glass" style="border-radius:12px; padding:12px 14px; margin-top:14px">
-        <h3 style="margin:0 0 6px">数据保留（PRD §4.6）</h3>
-        <label style="margin:8px 0 4px">图片保留天数（0=永久保留）</label>
+      <div class="glass card">
+        <h3>屏幕录制权限（PRD §6 / P2）</h3>
+        <div style="display:flex; align-items:center; gap:12px">
+          <div
+            class="perm-dot"
+            :style="perm ? (perm.granted ? { background: '#4ade80', boxShadow: '0 0 10px rgba(74,222,128,.6)' } : { background: '#f87171', boxShadow: '0 0 10px rgba(248,113,113,.6)' }) : { background: '#5a5f8a' }"
+          />
+          <div style="flex:1">
+            <div style="font-size:13px; font-weight:600; color:#fff">
+              {{ perm ? (perm.granted ? '已授权 — 可正常记录' : '未授权 — 仅记录休息时段') : '检测中…' }}
+            </div>
+            <div class="muted" style="font-size:11px; margin-top:2px">{{ perm ? perm.detail : ' ' }}</div>
+          </div>
+        </div>
+        <div style="margin-top:12px; display:flex; gap:10px; align-items:center">
+          <button class="btn" @click="checkPerm">重新检测</button>
+          <button class="btn" @click="openPermSettings">打开系统权限设置</button>
+        </div>
+
+        <div class="divider" />
+
+        <label style="display:flex; align-items:center; gap:8px">
+          <input type="checkbox" v-model="cfg.recording_enabled" style="width:auto" /> 允许后台截屏
+        </label>
+        <label>日记自动回溯天数（0=仅今天，1=今天+昨天）</label>
+        <input
+          v-model.number="cfg.diary_lookback_days"
+          type="number"
+          min="0"
+          max="30"
+          style="max-width: 80px; display: inline-block"
+        />
+        <div class="muted" style="font-size:11px; margin-top:4px; line-height:1.5">
+          未授权时 screencapture 无法产出图像，LLens 将时段标记为「休息」不生成截图；授权后自动恢复。
+        </div>
+        <div style="margin-top:12px; display:flex; gap:10px; align-items:center">
+          <button class="btn primary" @click="save">保存</button>
+          <span v-if="saved" class="muted">已保存</span>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <h3>数据保留（PRD §4.6）</h3>
+        <label>图片保留天数（0=永久保留）</label>
         <input
           v-model.number="cfg.retention_image_days"
           type="number"
@@ -147,7 +185,7 @@ async function runCleanupNow() {
           max="3650"
           style="max-width: 80px; display: inline-block"
         />
-        <label style="margin:8px 0 4px; display:block">JSON 日志保留天数（0=永久保留）</label>
+        <label>JSON 日志保留天数（0=永久保留）</label>
         <input
           v-model.number="cfg.retention_json_days"
           type="number"
@@ -164,61 +202,32 @@ async function runCleanupNow() {
           </button>
           <span v-if="cleanMsg" class="muted" style="font-size:12px">{{ cleanMsg }}</span>
         </div>
-      </div>
-
-      <div style="margin-top: 16px; display:flex; gap:10px; align-items:center">
-        <button class="btn primary" @click="save">保存 LLM 设置</button>
-        <span v-if="saved" class="muted">已保存</span>
-        <span v-if="err" class="chip warn">{{ err }}</span>
-      </div>
-    </div>
-
-    <div class="glass card" style="max-width: 560px; margin-top:14px">
-      <h3>屏幕录制权限（PRD §6 / P2）</h3>
-      <div style="display:flex; align-items:center; gap:12px">
-        <div
-          class="perm-dot"
-          :style="perm ? (perm.granted ? { background: '#4ade80', boxShadow: '0 0 10px rgba(74,222,128,.6)' } : { background: '#f87171', boxShadow: '0 0 10px rgba(248,113,113,.6)' }) : { background: '#5a5f8a' }"
-        />
-        <div style="flex:1">
-          <div style="font-size:13px; font-weight:600; color:#fff">
-            {{ perm ? (perm.granted ? '已授权 — 可正常记录' : '未授权 — 仅记录休息时段') : '检测中…' }}
-          </div>
-          <div class="muted" style="font-size:11px; margin-top:2px">{{ perm ? perm.detail : ' ' }}</div>
+        <div style="margin-top:12px; display:flex; gap:10px; align-items:center">
+          <button class="btn primary" @click="save">保存</button>
+          <span v-if="saved" class="muted">已保存</span>
         </div>
       </div>
-      <div style="margin-top:12px; display:flex; gap:10px; align-items:center">
-        <button class="btn" @click="checkPerm">重新检测</button>
-        <button class="btn" @click="openPermSettings">打开系统权限设置</button>
-      </div>
-      <div class="muted" style="font-size:11px; margin-top:8px; line-height:1.5">
-        未授权时，screencapture 无法产出图像，LLens 会将该时段标记为「休息」而不生成截图；授权后自动恢复记录。
-      </div>
-    </div>
 
-    <div class="glass card" style="max-width: 560px; margin-top:14px">
-      <h3>数据目录</h3>
-      <div class="muted" style="font-size:12px; margin-bottom:10px">
-        当前：<code>{{ dataRoot || '…' }}</code>
+      <div class="glass card">
+        <h3>数据目录</h3>
+        <div class="muted" style="font-size:12px; margin-bottom:10px">
+          当前：<code>{{ dataRoot || '…' }}</code>
+        </div>
+        <label>更改数据目录</label>
+        <div style="display:flex; gap:8px; align-items:center">
+          <input v-model="newRoot" placeholder="例如 ~/mydata 或 /path/to/dir" style="flex:1" />
+          <button class="btn" :disabled="rootBusy || !newRoot.trim()" @click="changeDataRoot">
+            {{ rootBusy ? '…' : '应用' }}
+          </button>
+          <button class="btn" :disabled="rootBusy" @click="resetDataRoot">恢复默认</button>
+        </div>
+        <div v-if="rootSaved" class="muted" style="font-size:12px; margin-top:6px">已切换数据目录</div>
+        <div v-if="rootErr" class="chip warn" style="margin-top:6px">{{ rootErr }}</div>
+        <div class="muted" style="font-size:11px; margin-top:10px; line-height:1.6">
+          目录结构：screenshots/ · logs/ · summaries/ · diary/<br />
+          默认 <code>~/.screenlog</code>，切换后自动迁移。
+        </div>
       </div>
-      <label>更改数据目录</label>
-      <div style="display:flex; gap:8px; align-items:center">
-        <input v-model="newRoot" placeholder="例如 ~/mydata 或 /path/to/dir" style="flex:1" />
-        <button class="btn" :disabled="rootBusy || !newRoot.trim()" @click="changeDataRoot">
-          {{ rootBusy ? '…' : '应用' }}
-        </button>
-        <button class="btn" :disabled="rootBusy" @click="resetDataRoot">恢复默认</button>
-      </div>
-      <div v-if="rootSaved" class="muted" style="font-size:12px; margin-top:6px">已切换数据目录，页面已刷新</div>
-      <div v-if="rootErr" class="chip warn" style="margin-top:6px">{{ rootErr }}</div>
-      <div class="muted" style="font-size:11px; margin-top:10px; line-height:1.6">
-        目录结构：screenshots/ · logs/ · summaries/ · diary/<br />
-        切换后会自动在新目录创建子目录并迁移 LLM 配置读取位置。
-      </div>
-    </div>
-
-    <div class="muted" style="font-size: 12px; max-width: 560px; margin-top:12px">
-      数据目录可通过上方更改，默认 <code>~/.screenlog</code>
     </div>
   </div>
 </template>
@@ -226,9 +235,33 @@ async function runCleanupNow() {
 <style scoped>
 label {
   display: block;
-  margin: 14px 0 6px;
+  margin: 10px 0 4px;
   font-size: 13px;
   color: #aeb4dc;
+}
+
+/* 左右两列布局，卡片等高 + 超出滚动 */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+.grid .glass.card {
+  min-height: 0;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  margin: 14px 0;
 }
 code {
   color: #8fd6ff;
