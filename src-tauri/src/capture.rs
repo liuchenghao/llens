@@ -748,7 +748,7 @@ async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
 /// 使用 user32/gdi32 FFI + image crate 编码 PNG。
 #[cfg(target_os = "windows")]
 mod gdi_capture {
-    use image::{ImageEncoder, RgbaImage};
+    use image::{ExtendedColorType, codecs::png::PngEncoder};
     use std::path::Path;
 
     #[repr(C)]
@@ -767,7 +767,6 @@ mod gdi_capture {
     }
 
     #[repr(C)]
-    #[derive(Default, Clone, Copy)]
     struct BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER,
         // BI_RGB：无颜色表
@@ -893,38 +892,24 @@ mod gdi_capture {
             SelectObject(hdc, _old);
             delete_gdi_objects(hdc, hbm, hsrc);
 
-            // BGRA -> RGBA
-            let mut rgba = RgbaImage::new(w as u32, h as u32);
+            // BGRA -> RGBA（直接写缓冲，避免 0.25 版无 set_pixel）
+            let mut rgba = vec![0u8; buf_size];
             for y in 0..h as usize {
                 for x in 0..w as usize {
                     let i = (y * (w as usize) + x) * 4;
-                    rgba.set_pixel(
-                        x as u32,
-                        y as u32,
-                        [
-                            pixels[i + 2], // R
-                            pixels[i + 1], // G
-                            pixels[i],     // B
-                            pixels[i + 3], // A
-                        ],
-                    );
+                    rgba[i] = pixels[i + 2]; // R
+                    rgba[i + 1] = pixels[i + 1]; // G
+                    rgba[i + 2] = pixels[i]; // B
+                    rgba[i + 3] = pixels[i + 3]; // A
                 }
             }
-            // 直接编码 PNG 写入文件（避免 image::save 在部分环境下对路径的处理差异）
-            let encoder = image::PngEncoder::new(std::io::BufWriter::new(
-                std::fs::File::create(out).map_err(|e| {
-                    CaptureError::Gdi(format!("无法创建输出文件：{e}"))
-                })?,
-            ));
-            let rgba_buf: Vec<u8> = { let img = &rgba; img.as_raw().to_vec() };
-            encoder
-                .write_image(
-                    &rgba_buf,
-                    w as u32,
-                    h as u32,
-                    image::ExtendedColorType::Rgba8,
-                )
-                .map_err(|e| CaptureError::Gdi(format!("PNG 编码失败：{e}")))
+            // 直接编码 PNG 写入文件（PngEncoder::new 直接接收 W: Write，无需 BufWriter）
+            let file = std::fs::File::create(out)
+                .map_err(|e| CaptureError::Gdi(format!("无法创建输出文件：{e}")))?;
+            PngEncoder::new(file)
+                .write_image(&rgba, w as u32, h as u32, ExtendedColorType::Rgba8)
+                .map_err(|e| CaptureError::Gdi(format!("PNG 编码失败：{e}")))?;
+            Ok(())
         }
     }
 
