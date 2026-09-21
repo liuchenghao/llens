@@ -455,9 +455,10 @@ public class LLensCapture {
         std::fs::write(&tmp_cs, cs_code)
             .map_err(|e| format!("write temp .cs: {e}"))?;
         let tmp_cs_arg = tmp_cs.to_string_lossy().replace('"', "\\\"");
-        // PowerShell: Add-Type 从文件编译 C# 类，再调 Capture(path)
+        // PowerShell: Add-Type 从 .cs 文件编译 C# 类（注意：-Path 与 -Language 不能同用，
+        // -Path 属于含 -ReferencedAssemblies 的参数集，去掉 -Language 即可）
         let ps_cmd = format!(
-            "Add-Type -Language CSharp -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
+            "Add-Type -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
         );
         let out = std::process::Command::new("powershell")
             .arg("-NoProfile")
