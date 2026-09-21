@@ -1,5 +1,6 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <!-- 两个大镜头交叉咬合 + 大量不规则散布小镜头（密集恐惧感，有疏有密） -->
+  <!-- 两个大镜头交叉咬合 + 大量不规则散布小镜头（密集恐惧感） -->
+  <!-- 深色圆角底铺满 1024，Windows 资源管理器 / 安装包不再出现白底 -->
   <defs>
     <radialGradient id="bgA" cx="42%" cy="34%" r="95%">
       <stop offset="0%" stop-color="#3b82f6"/>
@@ -23,10 +24,11 @@
     </radialGradient>
   </defs>
 
-  <rect x="96" y="96" width="832" height="832" rx="196" ry="196" fill="url(#bgA)"/>
+  <!-- 满幅深色圆角底（1024 内填满，避免 Windows 白底） -->
+  <rect x="0" y="0" width="1024" height="1024" rx="196" ry="196" fill="url(#bgA)"/>
   <ellipse cx="440" cy="250" rx="320" ry="150" fill="#ffffff" opacity="0.10"/>
 
-  <!-- ===== 大量小镜头：不规则散布，避免均匀网格式（密集但有机） ===== -->
+  <!-- 大量小镜头：不规则散布（有疏有密） -->
   <g opacity="0.9">
     <!-- 左上密集区 -->
     <g><circle cx="222" cy="252" r="22" fill="url(#mini)"/><circle cx="222" cy="252" r="11" fill="#15103d"/><circle cx="216" cy="246" r="3" fill="#fff" opacity=".55"/></g>
@@ -46,7 +48,7 @@
     <g><circle cx="850" cy="530" r="12" fill="url(#mini)"/><circle cx="850" cy="530" r="6" fill="#15103d"/></g>
     <g><circle cx="760" cy="410" r="15" fill="url(#mini)"/><circle cx="760" cy="410" r="7" fill="#15103d"/></g>
 
-    <!-- 右侧纵向一条疏密交错 -->
+    <!-- 右侧纵向疏密交错 -->
     <g><circle cx="818" cy="556" r="20" fill="url(#mini)"/><circle cx="818" cy="556" r="10" fill="#15103d"/><circle cx="812" cy="550" r="3" fill="#fff" opacity=".5"/></g>
     <g><circle cx="788" cy="648" r="15" fill="url(#mini)"/><circle cx="788" cy="648" r="7" fill="#15103d"/></g>
     <g><circle cx="812" cy="736" r="22" fill="url(#mini)"/><circle cx="812" cy="736" r="11" fill="#15103d"/><circle cx="806" cy="730" r="3" fill="#fff" opacity=".55"/></g>
@@ -71,7 +73,7 @@
     <g><circle cx="400" cy="770" r="13" fill="url(#mini)"/><circle cx="400" cy="770" r="6" fill="#15103d"/></g>
     <g><circle cx="530" cy="830" r="12" fill="url(#mini)"/><circle cx="530" cy="830" r="6" fill="#15103d"/></g>
 
-    <!-- 中上疏区（两个大镜头上方点缀） -->
+    <!-- 中上疏区 -->
     <g><circle cx="472" cy="196" r="16" fill="url(#mini)"/><circle cx="472" cy="196" r="8" fill="#15103d"/></g>
     <g><circle cx="556" cy="216" r="13" fill="url(#mini)"/><circle cx="556" cy="216" r="6" fill="#15103d"/></g>
     <g><circle cx="608" cy="332" r="14" fill="url(#mini)"/><circle cx="608" cy="332" r="7" fill="#15103d"/></g>
@@ -79,7 +81,7 @@
     <g><circle cx="500" cy="280" r="15" fill="url(#mini)"/><circle cx="500" cy="280" r="7" fill="#15103d"/></g>
     <g><circle cx="660" cy="280" r="13" fill="url(#mini)"/><circle cx="660" cy="280" r="6" fill="#15103d"/></g>
 
-    <!-- 两个大镜头之间的缝隙区（密集感最强） -->
+    <!-- 两镜间隙（密集感最强） -->
     <g><circle cx="530" cy="480" r="16" fill="url(#mini)"/><circle cx="530" cy="480" r="8" fill="#15103d"/></g>
     <g><circle cx="560" cy="540" r="14" fill="url(#mini)"/><circle cx="560" cy="540" r="7" fill="#15103d"/></g>
     <g><circle cx="510" cy="580" r="13" fill="url(#mini)"/><circle cx="510" cy="580" r="6" fill="#15103d"/></g>
@@ -87,7 +89,7 @@
     <g><circle cx="640" cy="440" r="12" fill="url(#mini)"/><circle cx="640" cy="440" r="6" fill="#15103d"/></g>
     <g><circle cx="480" cy="640" r="14" fill="url(#mini)"/><circle cx="480" cy="640" r="7" fill="#15103d"/></g>
 
-    <!-- 边缘补点（四角附近） -->
+    <!-- 四角补点 -->
     <g><circle cx="170" cy="420" r="12" fill="url(#mini)"/><circle cx="170" cy="420" r="6" fill="#15103d"/></g>
     <g><circle cx="160" cy="720" r="13" fill="url(#mini)"/><circle cx="160" cy="720" r="6" fill="#15103d"/></g>
     <g><circle cx="480" cy="170" r="14" fill="url(#mini)"/><circle cx="480" cy="170" r="7" fill="#15103d"/></g>
@@ -96,8 +98,7 @@
     <g><circle cx="840" cy="320" r="14" fill="url(#mini)"/><circle cx="840" cy="320" r="7" fill="#15103d"/></g>
   </g>
 
-  <!-- ===== 两个大镜头交叉咬合（主体） ===== -->
-  <!-- 镜头 2（右后，略小略暗） -->
+  <!-- 两个大镜头交叉咬合（主体） -->
   <g>
     <circle cx="628" cy="560" r="212" fill="#fff" opacity="0.14"/>
     <circle cx="628" cy="560" r="180" fill="url(#lens2)"/>
@@ -107,7 +108,6 @@
     <circle cx="628" cy="560" r="20" fill="#9aa8ff"/>
   </g>
 
-  <!-- 镜头 1（左前，更大更亮，压住镜头 2 形成咬合） -->
   <g>
     <circle cx="410" cy="440" r="236" fill="#fff" opacity="0.16"/>
     <circle cx="410" cy="440" r="200" fill="url(#lens1)"/>

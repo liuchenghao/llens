@@ -423,8 +423,7 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
 
     #[cfg(target_os = "windows")]
     {
-        // ---- Windows: 单屏截屏，通过 PowerShell + System.Drawing 完成（Windows 10/11 自带 powershell.exe，无外部依赖）----
-        // 抓取主屏 PrimaryMonitorBounds，保存为 PNG 后删原图，保留压缩 JPEG 预览供 LLM 使用。
+        // ---- Windows: 单屏截屏，通过 PowerShell -WindowStyle Hidden + CREATE_NO_WINDOW 双保险隐藏窗口 ----
         let shot_path = shot_dir.join(format!("{base_stem}.png"));
         let shot_str = shot_path.to_string_lossy().to_string();
         // Windows 路径中的反斜杠在 PowerShell 字符串里无需转义；
@@ -474,6 +473,8 @@ public class LLensCapture {
         cmd.arg("-NoProfile")
             .arg("-NonInteractive")
             .arg("-STA")
+            .arg("-WindowStyle")
+            .arg("Hidden")
             .arg("-Command")
             .arg(&ps_cmd);
         // 隐藏 PowerShell 控制台窗口（Windows 下不弹黑色命令框）
