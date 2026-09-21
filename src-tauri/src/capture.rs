@@ -751,6 +751,7 @@ mod gdi_capture {
     use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
     use std::path::Path;
 
+    #[allow(non_snake_case)]
     #[repr(C)]
     struct BITMAPINFOHEADER {
         biSize: u32,
@@ -766,6 +767,7 @@ mod gdi_capture {
         biClrImportant: u32,
     }
 
+    #[allow(non_snake_case)]
     #[repr(C)]
     struct BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER,
