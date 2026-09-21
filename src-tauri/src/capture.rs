@@ -434,23 +434,22 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         // 方案：把 C# 源写到临时 .cs 文件，再 Add-Type -Path 编译加载。
         // 这样完全避开 shell 单行化/换行/引号转义问题（之前 -TypeDefinition 多行内联
         // 被 PowerShell 压成单行，导致 C# 编译器类型推导失败）。
-        let cs_code = "using System;\n"
-            + "using System.Drawing;\n"
-            + "using System.Runtime.InteropServices;\n"
-            + "public class LLensCapture {\n"
-            + "    [DllImport(\"user32.dll\")] static extern int GetSystemMetrics(int i);\n"
-            + "    public static void Capture(string path) {\n"
-            + "        int w = GetSystemMetrics(0); // SM_CXSCREEN\n"
-            + "        int h = GetSystemMetrics(1); // SM_CYSCREEN\n"
-            + "        Bitmap bmp = new Bitmap(w, h);\n"
-            + "        Graphics g = Graphics.FromImage(bmp);\n"
-            + "        // 源(0,0,0,0) 目标(0,0) 尺寸(w,h)：5 参数无歧义重载\n"
-            + "        g.CopyFromScreen(0, 0, 0, 0, new Size(w, h));\n"
-            + "        bmp.Save(path, ImageFormat.Png);\n"
-            + "        g.Dispose();\n"
-            + "        bmp.Dispose();\n"
-            + "    }\n"
-            + "}\n";
+        let cs_code = r#"using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+public class LLensCapture {
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+    public static void Capture(string path) {
+        int w = GetSystemMetrics(0); // SM_CXSCREEN
+        int h = GetSystemMetrics(1); // SM_CYSCREEN
+        Bitmap bmp = new Bitmap(w, h);
+        Graphics g = Graphics.FromImage(bmp);
+        g.CopyFromScreen(0, 0, 0, 0, new Size(w, h));
+        bmp.Save(path, ImageFormat.Png);
+        g.Dispose();
+        bmp.Dispose();
+    }
+}"#;
         // 写到临时 .cs 文件
         let tmp_cs = std::env::temp_dir().join(format!("llens_capture_{}.cs", std::process::id()));
         std::fs::write(&tmp_cs, cs_code)
