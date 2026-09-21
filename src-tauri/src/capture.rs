@@ -748,7 +748,7 @@ async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
 /// 使用 user32/gdi32 FFI + image crate 编码 PNG。
 #[cfg(target_os = "windows")]
 mod gdi_capture {
-    use image::{ExtendedColorType, codecs::png::PngEncoder};
+    use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
     use std::path::Path;
 
     #[repr(C)]
