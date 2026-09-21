@@ -470,12 +470,20 @@ public class LLensCapture {
         let ps_cmd = format!(
             "Add-Type -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing,System.Windows.Forms; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
         );
-        let out = std::process::Command::new("powershell")
-            .arg("-NoProfile")
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.arg("-NoProfile")
             .arg("-NonInteractive")
             .arg("-STA")
             .arg("-Command")
-            .arg(&ps_cmd)
+            .arg(&ps_cmd);
+        // 隐藏 PowerShell 控制台窗口（Windows 下不弹黑色命令框）
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd
             .output()
             .map_err(|e| format!("spawn powershell: {e}"))?;
         let _ = tmp_cs; // 文件已由 PowerShell 里 Remove-Item 清理
