@@ -437,12 +437,21 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         let cs_code = r#"using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Windows.Forms;
 using System.Runtime.InteropServices;
 public class LLensCapture {
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     public static void Capture(string path) {
-        int w = GetSystemMetrics(0); // SM_CXSCREEN
-        int h = GetSystemMetrics(1); // SM_CYSCREEN
+        SetProcessDPIAware();
+        // 主屏宽高：优先 GetSystemMetrics，失败时回退 SystemInformation（不依赖窗口句柄）
+        int w = GetSystemMetrics(0);
+        int h = GetSystemMetrics(1);
+        if (w <= 0 || h <= 0) {
+            System.Drawing.Rectangle b = SystemInformation.VirtualScreen;
+            w = b.Width; h = b.Height;
+        }
+        if (w <= 0 || h <= 0) throw new System.Exception("cannot determine screen size");
         Bitmap bmp = new Bitmap(w, h);
         Graphics g = Graphics.FromImage(bmp);
         g.CopyFromScreen(0, 0, 0, 0, new Size(w, h));
@@ -459,7 +468,7 @@ public class LLensCapture {
         // PowerShell: Add-Type 从 .cs 文件编译 C# 类（注意：-Path 与 -Language 不能同用，
         // -Path 属于含 -ReferencedAssemblies 的参数集，去掉 -Language 即可）
         let ps_cmd = format!(
-            "Add-Type -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
+            "Add-Type -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing,System.Windows.Forms; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
         );
         let out = std::process::Command::new("powershell")
             .arg("-NoProfile")

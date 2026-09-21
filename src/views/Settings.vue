@@ -135,7 +135,7 @@ async function runCleanupNow() {
       </div>
 
       <div class="glass card">
-        <h3>屏幕录制权限（PRD §6 / P2）</h3>
+        <h3>屏幕录制权限</h3>
         <div style="display:flex; align-items:center; gap:12px">
           <div
             class="perm-dot"
@@ -176,7 +176,7 @@ async function runCleanupNow() {
       </div>
 
       <div class="glass card">
-        <h3>数据保留（PRD §4.6）</h3>
+        <h3>数据保留</h3>
         <label>图片保留天数（0=永久保留）</label>
         <input
           v-model.number="cfg.retention_image_days"

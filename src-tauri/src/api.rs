@@ -447,7 +447,18 @@ fn probe_screen_permission() -> ScreenPermission {
 
 #[cfg(not(target_os = "macos"))]
 fn probe_screen_permission() -> ScreenPermission {
-    ScreenPermission { granted: true, detail: "非 macOS，跳过检测".into() }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: 没有 macOS 那样的屏幕录制权限门控。能执行到这里说明进程可运行，
+        // 截屏能力由 capture.rs 的 PowerShell + GDI 路径决定（无需额外 TCC 授权）。
+        ScreenPermission { granted: true, detail: "Windows 无需系统级屏幕录制授权".into() }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: 依赖 X11 会话，没有类似 TCC 的权限系统；X11 下默认可访问 X server，
+        // Wayland 下 scrot 可能抓不到内容（需配合 grim/wayland portal），当前按已授权处理。
+        ScreenPermission { granted: true, detail: "Linux 无系统级屏幕录制授权门控".into() }
+    }
 }
 
 /// 检查当前屏幕录制权限是否可用。
@@ -456,7 +467,7 @@ pub fn screen_permission() -> ScreenPermission {
     probe_screen_permission()
 }
 
-/// 打开系统「隐私与安全 → 屏幕与系统录音」页，便于用户手动授权。
+/// 打开系统「隐私与安全 → 屏幕与系统录音」页（macOS）或「屏幕录制权限」提示页（Windows/Linux）。
 #[tauri::command]
 pub fn open_screen_recording_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -465,6 +476,21 @@ pub fn open_screen_recording_settings() -> Result<(), String> {
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
             .spawn()
             .map_err(|e| format!("open settings: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 没有集中的“屏幕录制权限”设置页，屏幕捕获不走 TCC 式授权。
+        // 最接近的入口是“隐私设置 → 应用 → 相机/麦克风/位置”，或“设置 → 辅助功能 → 剪贴板历史”无关。
+        // 这里打开“隐私与安全性”主页作为引导，并提示用户 Windows 上 LLENS 不需要额外授权。
+        std::process::Command::new("ms-settings")
+            .arg("privacy")
+            .spawn()
+            .map_err(|e| format!("open ms-settings: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux 没有统一设置入口；提示用户检查 X11 会话可用性即可。
+        eprintln!("Linux: 无系统级屏幕录制权限设置页，请确认运行在 X11 会话（非 Wayland 或已授权）");
     }
     Ok(())
 }
