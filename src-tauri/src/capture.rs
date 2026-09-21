@@ -436,6 +436,7 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
         // 被 PowerShell 压成单行，导致 C# 编译器类型推导失败）。
         let cs_code = r#"using System;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 public class LLensCapture {
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
