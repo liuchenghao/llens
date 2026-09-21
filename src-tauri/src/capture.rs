@@ -423,75 +423,14 @@ pub async fn capture_once(cfg: &Config, data_root: &PathBuf) -> Result<Frame, St
 
     #[cfg(target_os = "windows")]
     {
-        // ---- Windows: 单屏截屏，通过 PowerShell -WindowStyle Hidden + CREATE_NO_WINDOW 双保险隐藏窗口 ----
+        // ---- Windows: 原生 Win32 GDI 截屏（零子进程，彻底不弹任何命令框）----
         let shot_path = shot_dir.join(format!("{base_stem}.png"));
-        let shot_str = shot_path.to_string_lossy().to_string();
-        // Windows 路径中的反斜杠在 PowerShell 字符串里无需转义；
-        // 仅处理可能出现的双引号。
-        // 双引号转义（Windows 路径里极少出现，但保险起见处理）
-        let shot_arg = shot_str.replace('"', "\\\"");
-        // 方案：把 C# 源写到临时 .cs 文件，再 Add-Type -Path 编译加载。
-        // 这样完全避开 shell 单行化/换行/引号转义问题（之前 -TypeDefinition 多行内联
-        // 被 PowerShell 压成单行，导致 C# 编译器类型推导失败）。
-        let cs_code = r#"using System;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Windows.Forms;
-using System.Runtime.InteropServices;
-public class LLensCapture {
-    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
-    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
-    public static void Capture(string path) {
-        SetProcessDPIAware();
-        // 主屏宽高：优先 GetSystemMetrics，失败时回退 SystemInformation（不依赖窗口句柄）
-        int w = GetSystemMetrics(0);
-        int h = GetSystemMetrics(1);
-        if (w <= 0 || h <= 0) {
-            System.Drawing.Rectangle b = SystemInformation.VirtualScreen;
-            w = b.Width; h = b.Height;
-        }
-        if (w <= 0 || h <= 0) throw new System.Exception("cannot determine screen size");
-        Bitmap bmp = new Bitmap(w, h);
-        Graphics g = Graphics.FromImage(bmp);
-        g.CopyFromScreen(0, 0, 0, 0, new Size(w, h));
-        bmp.Save(path, ImageFormat.Png);
-        g.Dispose();
-        bmp.Dispose();
-    }
-}"#;
-        // 写到临时 .cs 文件
-        let tmp_cs = std::env::temp_dir().join(format!("llens_capture_{}.cs", std::process::id()));
-        std::fs::write(&tmp_cs, cs_code)
-            .map_err(|e| format!("write temp .cs: {e}"))?;
-        let tmp_cs_arg = tmp_cs.to_string_lossy().replace('"', "\\\"");
-        // PowerShell: Add-Type 从 .cs 文件编译 C# 类（注意：-Path 与 -Language 不能同用，
-        // -Path 属于含 -ReferencedAssemblies 的参数集，去掉 -Language 即可）
-        let ps_cmd = format!(
-            "Add-Type -Path '{tmp_cs_arg}' -ReferencedAssemblies System.Drawing,System.Windows.Forms; [LLensCapture]::Capture('{shot_arg}'); Remove-Item '{tmp_cs_arg}' -ErrorAction SilentlyContinue",
-        );
-        let mut cmd = std::process::Command::new("powershell");
-        cmd.arg("-NoProfile")
-            .arg("-NonInteractive")
-            .arg("-STA")
-            .arg("-WindowStyle")
-            .arg("Hidden")
-            .arg("-Command")
-            .arg(&ps_cmd);
-        // 隐藏 PowerShell 控制台窗口（Windows 下不弹黑色命令框）
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        let out = cmd
-            .output()
-            .map_err(|e| format!("spawn powershell: {e}"))?;
-        let _ = tmp_cs; // 文件已由 PowerShell 里 Remove-Item 清理
-        if !out.status.success() || !shot_path.exists() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(format!("powershell screenshot failed: {stderr}"));
-        }
+        gdi_capture::capture_screen(&shot_path).map_err(|e| match e {
+            gdi_capture::CaptureError::Dpi => {
+                "Windows: 无法确定屏幕分辨率（GDI 截屏失败）".to_string()
+            }
+            gdi_capture::CaptureError::Gdi(msg) => format!("Windows: GDI 截屏失败：{msg}"),
+        })?;
 
         let month = now.format("%Y-%m").to_string();
         let preview_rel = format!("screenshots/{month}/{base_stem}.jpg");
@@ -803,4 +742,202 @@ async fn compress_for_llm(raw: &[u8]) -> Result<(Vec<u8>, String), String> {
         .map_err(|e| format!("jpeg encode: {e}"))?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf);
     Ok((buf, format!("data:image/jpeg;base64,{b64}")))
+}
+
+/// Windows 原生 GDI 截屏：零子进程，不弹任何命令框。
+/// 使用 user32/gdi32 FFI + image crate 编码 PNG。
+#[cfg(target_os = "windows")]
+mod gdi_capture {
+    use image::{ImageEncoder, RgbaImage};
+    use std::path::Path;
+
+    #[repr(C)]
+    struct BITMAPINFOHEADER {
+        biSize: u32,
+        biWidth: i32,
+        biHeight: i32,
+        biPlanes: u16,
+        biBitCount: u16,
+        biCompression: u32,
+        biSizeImage: u32,
+        biXPelsPerMeter: i32,
+        biYPelsPerMeter: i32,
+        biClrUsed: u32,
+        biClrImportant: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER,
+        // BI_RGB：无颜色表
+    }
+
+    extern "system" {
+        // user32
+        fn GetSystemMetrics(iMetric: i32) -> i32;
+        fn SetProcessDPIAware() -> i32;
+        // gdi32
+        fn GetDC(hwnd: *const core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn ReleaseDC(hwnd: *const core::ffi::c_void, hDC: *mut core::ffi::c_void) -> i32;
+        fn CreateCompatibleDC(hDC: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn DeleteDC(hDC: *mut core::ffi::c_void) -> i32;
+        fn CreateCompatibleBitmap(
+            hDC: *mut core::ffi::c_void,
+            nWidth: i32,
+            nHeight: i32,
+        ) -> *mut core::ffi::c_void;
+        fn SelectObject(
+            hDC: *mut core::ffi::c_void,
+            hgObj: *mut core::ffi::c_void,
+        ) -> *mut core::ffi::c_void;
+        fn BitBlt(
+            hdestDC: *mut core::ffi::c_void,
+            xDest: i32,
+            yDest: i32,
+            nWidth: i32,
+            nHeight: i32,
+            hsrcDC: *mut core::ffi::c_void,
+            xSrc: i32,
+            ySrc: i32,
+            dwRop: u32,
+        ) -> i32;
+        fn GetDIBits(
+            hDC: *mut core::ffi::c_void,
+            hbm: *mut core::ffi::c_void,
+            uiStartScan: u32,
+            cLines: u32,
+            lpvBits: *mut core::ffi::c_void,
+            lpbi: *mut BITMAPINFO,
+            uiPlane: u32,
+        ) -> i32;
+    }
+
+    const SM_CXSCREEN: i32 = 0;
+    const SM_CYSCREEN: i32 = 1;
+    const SRCCOPY: u32 = 0x00CC_0020;
+
+    pub enum CaptureError {
+        Dpi,
+        Gdi(String),
+    }
+
+    /// 截取主屏，编码为 PNG 写入 `out`。
+    pub fn capture_screen(out: &Path) -> Result<(), CaptureError> {
+        unsafe {
+            SetProcessDPIAware();
+            let w = GetSystemMetrics(SM_CXSCREEN);
+            let h = GetSystemMetrics(SM_CYSCREEN);
+            if w <= 0 || h <= 0 {
+                return Err(CaptureError::Dpi);
+            }
+
+            let hsrc = GetDC(core::ptr::null());
+            if hsrc.is_null() {
+                return Err(CaptureError::Gdi("GetDC 失败".into()));
+            }
+            let hdc = CreateCompatibleDC(hsrc);
+            if hdc.is_null() {
+                ReleaseDC(core::ptr::null(), hsrc);
+                return Err(CaptureError::Gdi("CreateCompatibleDC 失败".into()));
+            }
+            let hbm = CreateCompatibleBitmap(hdc, w, h);
+            if hbm.is_null() {
+                DeleteDC(hdc);
+                ReleaseDC(core::ptr::null(), hsrc);
+                return Err(CaptureError::Gdi("CreateCompatibleBitmap 失败".into()));
+            }
+            let _old = SelectObject(hdc, hbm);
+
+            let ok = BitBlt(hdc, 0, 0, w, h, hsrc, 0, 0, SRCCOPY);
+            if ok == 0 {
+                SelectObject(hdc, _old);
+                // 清理
+                delete_gdi_objects(hdc, hbm, hsrc);
+                return Err(CaptureError::Gdi("BitBlt 失败".into()));
+            }
+
+            // 读取像素
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w,
+                    biHeight: -h, // 负值 = 顶到底（BGRA）
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: 0, // BI_RGB
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+            };
+            let buf_size = (w * h * 4) as usize;
+            let mut pixels: Vec<u8> = vec![0u8; buf_size];
+            let n = GetDIBits(
+                hdc,
+                hbm,
+                0,
+                h as u32,
+                pixels.as_mut_ptr() as *mut core::ffi::c_void,
+                &mut bmi,
+                0,
+            );
+            if n == 0 {
+                SelectObject(hdc, _old);
+                delete_gdi_objects(hdc, hbm, hsrc);
+                return Err(CaptureError::Gdi("GetDIBits 失败".into()));
+            }
+
+            SelectObject(hdc, _old);
+            delete_gdi_objects(hdc, hbm, hsrc);
+
+            // BGRA -> RGBA
+            let mut rgba = RgbaImage::new(w as u32, h as u32);
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let i = (y * (w as usize) + x) * 4;
+                    rgba.set_pixel(
+                        x as u32,
+                        y as u32,
+                        [
+                            pixels[i + 2], // R
+                            pixels[i + 1], // G
+                            pixels[i],     // B
+                            pixels[i + 3], // A
+                        ],
+                    );
+                }
+            }
+            // 直接编码 PNG 写入文件（避免 image::save 在部分环境下对路径的处理差异）
+            let encoder = image::PngEncoder::new(std::io::BufWriter::new(
+                std::fs::File::create(out).map_err(|e| {
+                    CaptureError::Gdi(format!("无法创建输出文件：{e}"))
+                })?,
+            ));
+            let rgba_buf: Vec<u8> = { let img = &rgba; img.as_raw().to_vec() };
+            encoder
+                .write_image(
+                    &rgba_buf,
+                    w as u32,
+                    h as u32,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| CaptureError::Gdi(format!("PNG 编码失败：{e}")))
+        }
+    }
+
+    unsafe fn delete_gdi_objects(
+        hdc: *mut core::ffi::c_void,
+        hbm: *mut core::ffi::c_void,
+        hsrc: *mut core::ffi::c_void,
+    ) {
+        extern "system" {
+            fn DeleteObject(hg: *mut core::ffi::c_void) -> i32;
+        }
+        DeleteObject(hbm);
+        DeleteDC(hdc);
+        ReleaseDC(core::ptr::null(), hsrc);
+    }
 }
