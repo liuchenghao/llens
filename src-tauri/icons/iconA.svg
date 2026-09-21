@@ -1,6 +1,5 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <!-- 两个大镜头交叉咬合 + 大量不规则散布小镜头（密集恐惧感） -->
-  <!-- 深色圆角底铺满 1024，Windows 资源管理器 / 安装包不再出现白底 -->
+  <!-- 满幅铺底 + 两个交叉大镜头 + 大量不规则小镜头 -->
   <defs>
     <radialGradient id="bgA" cx="42%" cy="34%" r="95%">
       <stop offset="0%" stop-color="#3b82f6"/>
@@ -24,9 +23,8 @@
     </radialGradient>
   </defs>
 
-  <!-- 满幅深色圆角底（1024 内填满，避免 Windows 白底） -->
-  <rect x="0" y="0" width="1024" height="1024" rx="196" ry="196" fill="url(#bgA)"/>
-  <ellipse cx="440" cy="250" rx="320" ry="150" fill="#ffffff" opacity="0.10"/>
+  <!-- 满幅深色底（铺满 1024 正方形，四角无白边） -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bgA)"/>
 
   <!-- 大量小镜头：不规则散布（有疏有密） -->
   <g opacity="0.9">
