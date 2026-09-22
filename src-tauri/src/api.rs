@@ -382,7 +382,10 @@ pub fn desktop_shortcut() -> Result<String, String> {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows：用 PowerShell COM WScript.Shell 创建 .lnk（CREATE_NO_WINDOW 不弹窗）
+        // Windows：不依赖 PowerShell，纯 Rust 创建 .lnk 快捷方式。
+        // .lnk 二进制格式（SHLINKINFOW）较复杂，简化方案：
+        // 用 CreateProcessW + ShellExecuteW 创建快捷方式，或直接写 registry 启动项。
+        // 最稳妥：用 cmd /c start /b mshta 执行 JScript 创建 .lnk（无控制台窗口）。
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let home = std::env::var("USERPROFILE").map(std::path::PathBuf::from)
@@ -391,21 +394,26 @@ pub fn desktop_shortcut() -> Result<String, String> {
         let _ = std::fs::create_dir_all(&desktop);
         let exe = std::env::current_exe()
             .map_err(|e| format!("cannot resolve exe: {e}"))?;
-        let exe_s = exe.to_string_lossy().to_string().replace('"', "\\\"");
+        let exe_s = exe.to_string_lossy().to_string();
         let lnk = desktop.join("LLens.lnk");
-        let lnk_s = lnk.to_string_lossy().to_string().replace('"', "\\\"");
-        let script = format!(
-            "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{lnk_s}'); $s.TargetPath = '{exe_s}'; $s.Save()"
+        let lnk_s = lnk.to_string_lossy().to_string();
+        // 用 JScript + cscript /b /nologo 创建 .lnk（/b 静默模式，无控制台）
+        let js = format!(
+            r#"var ws = new ActiveXObject("WScript.Shell");
+var s = ws.CreateShortcut("{}");
+s.TargetPath = "{}";
+s.Save();"#,
+            lnk_s, exe_s
         );
-        let mut cmd = std::process::Command::new("powershell");
-        cmd.arg("-NoProfile")
-            .arg("-NonInteractive")
-            .arg("-WindowStyle")
-            .arg("Hidden")
-            .arg("-Command")
-            .arg(&script);
+        let js_tmp = std::env::temp_dir().join(format!("llens_lnk_{}.js", std::process::id()));
+        std::fs::write(&js_tmp, &js).map_err(|e| format!("write .js: {e}"))?;
+        let mut cmd = std::process::Command::new("cscript");
+        cmd.arg("//B")
+            .arg("//Nologo")
+            .arg(js_tmp.to_string_lossy().to_string());
         cmd.creation_flags(CREATE_NO_WINDOW);
-        let out = cmd.output().map_err(|e| format!("powershell: {e}"))?;
+        let out = cmd.output().map_err(|e| format!("cscript: {e}"))?;
+        let _ = std::fs::remove_file(&js_tmp);
         if !out.status.success() {
             return Err(format!(
                 "创建 .lnk 失败: {}",
@@ -420,7 +428,6 @@ pub fn desktop_shortcut() -> Result<String, String> {
         let home = std::env::var("HOME").map(std::path::PathBuf::from)
             .map_err(|e| format!("no HOME: {e}"))?;
         let desktop = home.join("Desktop");
-        let alias = desktop.join("LLens.alias");
         let exe = std::env::current_exe()
             .map_err(|e| format!("cannot resolve current exe: {e}"))?;
         let target = {
@@ -431,17 +438,33 @@ pub fn desktop_shortcut() -> Result<String, String> {
                 s
             }
         };
-        let command_script = desktop.join("LLens.command");
-        let content = format!("#!/bin/bash\nopen '{}'\n", target);
-        std::fs::write(&command_script, content)
-            .map_err(|e| format!("write desktop shortcut: {e}"))?;
-        #[cfg(target_os = "macos")]
-        {
+        // 删除旧的 LLens.command（终端脚本，Finder 固定显示终端图标）
+        let _ = std::fs::remove_file(desktop.join("LLens.command"));
+        // 用 osascript 创建 Finder alias，显示应用自带图标
+        let script = format!(
+            "tell application \\\"Finder\\\" to make new alias at (desktop as text) to (POSIX file \\\"{}\\\")",
+            target
+        );
+        let out = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .map_err(|e| format!("osascript: {e}"))?;
+        if out.status.success() {
+            Ok(desktop.join("LLens.app").to_string_lossy().to_string())
+        } else {
+            let command_script = desktop.join("LLens.command");
+            let content = format!("#!/bin/bash\nopen '{}'\n", target);
+            std::fs::write(&command_script, content)
+                .map_err(|e| format!("write desktop shortcut: {e}"))?;
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&command_script, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::set_permissions(
+                &command_script,
+                std::fs::Permissions::from_mode(0o755),
+            );
+            let err = String::from_utf8_lossy(&out.stderr);
+            Err(format!("osascript 创建 alias 失败（已回退到 .command）: {err}"))
         }
-        let _ = &alias;
-        Ok(command_script.to_string_lossy().to_string())
     }
 }
 
