@@ -49,7 +49,8 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
         "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico"
+        "uninstallerIcon": "icons/icon.ico",
+        "template": "bundler/nsis/installer.nsi"
       }
     },
     "linux": {
