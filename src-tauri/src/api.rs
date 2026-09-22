@@ -380,7 +380,42 @@ pub fn desktop_shortcut() -> Result<String, String> {
         Ok(path.to_string_lossy().to_string())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Windows：用 PowerShell COM WScript.Shell 创建 .lnk（CREATE_NO_WINDOW 不弹窗）
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let home = std::env::var("USERPROFILE").map(std::path::PathBuf::from)
+            .map_err(|e| format!("no USERPROFILE: {e}"))?;
+        let desktop = home.join("Desktop");
+        let _ = std::fs::create_dir_all(&desktop);
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("cannot resolve exe: {e}"))?;
+        let exe_s = exe.to_string_lossy().to_string().replace('"', "\\\"");
+        let lnk = desktop.join("LLens.lnk");
+        let lnk_s = lnk.to_string_lossy().to_string().replace('"', "\\\"");
+        let script = format!(
+            "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{lnk_s}'); $s.TargetPath = '{exe_s}'; $s.Save()"
+        );
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-WindowStyle")
+            .arg("Hidden")
+            .arg("-Command")
+            .arg(&script);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let out = cmd.output().map_err(|e| format!("powershell: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "创建 .lnk 失败: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        Ok(lnk.to_string_lossy().to_string())
+    }
+
+    #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").map(std::path::PathBuf::from)
             .map_err(|e| format!("no HOME: {e}"))?;
