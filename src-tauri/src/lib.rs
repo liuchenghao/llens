@@ -23,6 +23,14 @@ pub fn run() {
         ))
         .manage(tstate::AppState::new())
         .setup(|app| {
+            // 显式设置应用图标：同步更新窗口标题栏 + Windows 任务栏 + alt-tab
+            // （Tauri 2 不会自动把 ico 应用到任务栏，必须 set_icon）
+            if let Some(window) = app.get_webview_window("main") {
+                let icon = app.default_window_icon().cloned();
+                if let Some(icon) = icon {
+                    let _ = window.set_icon(icon);
+                }
+            }
             let handle = app.handle().clone();
             let state: &tstate::AppState = &app.state();
             if state.recording.load(std::sync::atomic::Ordering::SeqCst) {
