@@ -879,6 +879,15 @@ Function CreateOrUpdateDesktopShortcut
     ${EndIf}
   ${EndIf}
 
-  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ; *** CUSTOM: create the desktop .lnk with an explicit embedded icon
+  ; CreateShortcut signature: CreateShortcut "lnk" "target" "workDir" "desc" [,iconPath,iconIndex].
+  ; Decouples the shortcut's displayed icon from the Windows Explorer icon
+  ; cache of the target .exe, so a stale cached exe icon no longer makes the
+  ; desktop shortcut show the old icon.
+  !if "${INSTALLERICON}" != ""
+    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "${INSTALLERICON},0"
+  !else
+    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  !endif
   !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd
