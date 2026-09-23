@@ -879,16 +879,14 @@ Function CreateOrUpdateDesktopShortcut
     ${EndIf}
   ${EndIf}
 
-  ; *** CUSTOM: embed the icon into the desktop .lnk so it never depends on
-  ; the (very sticky) Windows desktop icon cache. CreateShortcut's optional
-  ; args are fully positional, in this order (per NSIS 3.x / error message):
-  ;   CreateShortcut lnk target [params [icon_file [icon_index [showmode [hotkey [comment]]]]]]
-  ; so we pass icon_file + icon_index + showmode after the 2 required args.
-  ; ${INSTALLERICON} is an absolute .ico path (Tauri canonicalizes it).
-  !if "${INSTALLERICON}" != ""
-    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "${INSTALLERICON}" 0 SW_SHOWNORMAL
-  !else
-    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-  !endif
+  ; *** CUSTOM: desktop .lnk icon handling.
+  ; NSIS's CreateShortcut optional icon args keep failing with `cannot
+  ; interpret icon index` (the plugin re-resolves the icon file and our
+  ; path form isn't accepted), so we use the clean 2-arg form: the shortcut
+  ; follows the target .exe's embedded icon resource, which carries our
+  ; app icon (build-time icon + runtime set_icon). On a machine where the
+  ; desktop still shows a stale icon after a rebuild, clear the Windows
+  ; icon cache (see scripts/refresh_desktop_icon.ps1).
+  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
   !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd
