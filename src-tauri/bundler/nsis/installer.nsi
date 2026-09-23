@@ -879,14 +879,16 @@ Function CreateOrUpdateDesktopShortcut
     ${EndIf}
   ${EndIf}
 
-  ; *** CUSTOM: desktop .lnk icon.
-  ; Rely on the target .exe's embedded icon (set via set_icon at runtime and
-  ; build-time resource). Keep the plain CreateShortcut so the shortcut
-  ; follows the .exe icon. To force the new icon to show, clear the Windows
-  ; icon cache on the machine (see below) rather than embedding an icon path,
-  ; because NSIS CreateShortcut's optional icon argument is positional and
-  ; easily mis-parsed when the workdir/description args are empty (which
-  ; produced a blank icon).
-  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ; *** CUSTOM: embed the icon into the desktop .lnk so it never depends on
+  ; the (very sticky) Windows desktop icon cache. CreateShortcut is fully
+  ; positional, so pass ALL optional args in order: out, target, workdir,
+  ; description, showcmd, icon, iconindex. (A previous attempt that omitted
+  ; showcmd mis-aligned the icon into the description slot, yielding a blank
+  ; icon.) ${INSTALLERICON} is an absolute .ico path (Tauri canonicalizes it).
+  !if "${INSTALLERICON}" != ""
+    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "" SW_SHOWNORMAL "${INSTALLERICON}" 0
+  !else
+    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  !endif
   !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd
