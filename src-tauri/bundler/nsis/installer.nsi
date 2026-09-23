@@ -880,13 +880,13 @@ Function CreateOrUpdateDesktopShortcut
   ${EndIf}
 
   ; *** CUSTOM: embed the icon into the desktop .lnk so it never depends on
-  ; the (very sticky) Windows desktop icon cache. CreateShortcut is fully
-  ; positional, so pass ALL optional args in order: out, target, workdir,
-  ; description, showcmd, icon, iconindex. (A previous attempt that omitted
-  ; showcmd mis-aligned the icon into the description slot, yielding a blank
-  ; icon.) ${INSTALLERICON} is an absolute .ico path (Tauri canonicalizes it).
+  ; the (very sticky) Windows desktop icon cache. CreateShortcut's optional
+  ; args are fully positional, in this order (per NSIS 3.x / error message):
+  ;   CreateShortcut lnk target [params [icon_file [icon_index [showmode [hotkey [comment]]]]]]
+  ; so we pass icon_file + icon_index + showmode after the 2 required args.
+  ; ${INSTALLERICON} is an absolute .ico path (Tauri canonicalizes it).
   !if "${INSTALLERICON}" != ""
-    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "" SW_SHOWNORMAL "${INSTALLERICON}" 0
+    CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "${INSTALLERICON}" 0 SW_SHOWNORMAL
   !else
     CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
   !endif
